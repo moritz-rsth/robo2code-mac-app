@@ -1,0 +1,77 @@
+<mujoco model="NEURA_LARA_5_RoboDK_derived">
+  <compiler angle="radian" meshdir="assets" autolimits="true" />
+  <option integrator="implicitfast" />
+  <default>
+    <joint damping="1" armature=".05" />
+  </default>
+  <asset>
+    <mesh name="link0_0" file="link0_0.obj" />
+    <mesh name="link1_0" file="link1_0.obj" />
+    <mesh name="link1_1" file="link1_1.obj" />
+    <mesh name="link2_0" file="link2_0.obj" />
+    <mesh name="link3_0" file="link3_0.obj" />
+    <mesh name="link3_1" file="link3_1.obj" />
+    <mesh name="link4_0" file="link4_0.obj" />
+    <mesh name="link5_0" file="link5_0.obj" />
+    <mesh name="link5_1" file="link5_1.obj" />
+    <mesh name="link6_0" file="link6_0.obj" />
+  </asset>
+  <worldbody>
+    <body name="base">
+      <inertial mass="3.5" pos="0.0033611394 -4.7311187e-07 0.0365" diaginertia="0.008646322 0.008046578 0.013584317" />
+      <geom type="mesh" mesh="link0_0" rgba="0.85098 0.85882 0.91765 1.0" contype="0" conaffinity="0" group="2" />
+      <geom name="collision0" type="capsule" fromto="0.0033611394 -0.046942674 0.0365 0.0033611394 0.046941727 0.0365" size="0.031024999916553497" group="3" rgba=".6 .5 .1 .2" />
+      <body name="link1" pos="0.0 0.0 0.22" quat="1.0 0.0 0.0 0.0">
+        <joint name="joint1" axis="0 0 1" range="-3.141592653589793 3.141592653589793" />
+        <inertial mass="4" pos="9.093806e-05 0.008677699 -0.046461746" diaginertia="0.027494153 0.022300161 0.016320791" />
+        <geom type="mesh" mesh="link1_0" rgba="0.62353 0.62353 0.62353 1.0" contype="0" conaffinity="0" group="2" />
+        <geom type="mesh" mesh="link1_1" rgba="0.85098 0.85882 0.91765 1.0" contype="0" conaffinity="0" group="2" />
+        <geom name="collision1" type="capsule" fromto="9.093806e-05 0.008677699 -0.103594005 9.093806e-05 0.008677699 0.010670517" size="0.05490599200129509" group="3" rgba=".6 .5 .1 .2" />
+        <body name="link2" pos="0.0 0.0 0.0" quat="0.5000000000000001 -0.5 -0.4999999999999999 -0.5">
+          <joint name="joint2" axis="0 0 1" range="-2.356194490192345 2.356194490192345" />
+          <inertial mass="6" pos="0.18500471 1.8626451e-09 0.1270644" diaginertia="0.011391234 0.12348664 0.12601763" />
+          <geom type="mesh" mesh="link2_0" rgba="0.85098 0.85882 0.91765 1.0" contype="0" conaffinity="0" group="2" />
+          <geom name="collision2" type="capsule" fromto="-0.018974654 1.8626451e-09 0.1270644 0.38898408 1.8626451e-09 0.1270644" size="0.04000476002693176" group="3" rgba=".6 .5 .1 .2" />
+          <body name="link3" pos="0.38 0.0 0.0" quat="0.7071067811865476 0.0 0.0 -0.7071067811865475">
+            <joint name="joint3" axis="0 0 1" range="-2.705260340591211 2.705260340591211" />
+            <inertial mass="3.5" pos="-9.313226e-09 0.039023865 0.006150406" diaginertia="0.017711418 0.010842328 0.013301555" />
+            <geom type="mesh" mesh="link3_0" rgba="0.62353 0.62353 0.62353 1.0" contype="0" conaffinity="0" group="2" />
+            <geom type="mesh" mesh="link3_1" rgba="0.85098 0.85882 0.91765 1.0" contype="0" conaffinity="0" group="2" />
+            <geom name="collision3" type="capsule" fromto="-9.313226e-09 -0.009323049 0.006150406 -9.313226e-09 0.08737078 0.006150406" size="0.04462921991944313" group="3" rgba=".6 .5 .1 .2" />
+            <body name="link4" pos="0.0 0.42 9.325873406851315e-17" quat="0.7071067811865476 -0.7071067811865475 0.0 0.0">
+              <joint name="joint4" axis="0 0 1" range="-3.141592653589793 3.141592653589793" />
+              <inertial mass="3" pos="0.0 -0.035750836 -0.12750183" diaginertia="0.035408016 0.030555632 0.009852384" />
+              <geom type="mesh" mesh="link4_0" rgba="0.85098 0.85882 0.91765 1.0" contype="0" conaffinity="0" group="2" />
+              <geom name="collision4" type="capsule" fromto="0.0 -0.035750836 -0.2525 0.0 -0.035750836 -0.0025036633" size="0.042500000447034836" group="3" rgba=".6 .5 .1 .2" />
+              <body name="link5" pos="0.0 0.0 0.0" quat="0.7071067811865476 0.7071067811865475 0.0 0.0">
+                <joint name="joint5" axis="0 0 1" range="-3.141592653589793 3.141592653589793" />
+                <inertial mass="2" pos="2.5045127e-05 0.036359772 0.004914064" diaginertia="0.0073509924 0.004339775 0.0052344976" />
+                <geom type="mesh" mesh="link5_0" rgba="0.62353 0.62353 0.62353 1.0" contype="0" conaffinity="0" group="2" />
+                <geom type="mesh" mesh="link5_1" rgba="0.85098 0.85882 0.91765 1.0" contype="0" conaffinity="0" group="2" />
+                <geom name="collision5" type="capsule" fromto="2.5045127e-05 -0.00757109 0.004914064 2.5045127e-05 0.08029063 0.004914064" size="0.03470936790108681" group="3" rgba=".6 .5 .1 .2" />
+                <body name="link6" pos="0.0 0.165 3.663735981263017e-17" quat="4.329780281177467e-17 -4.329780281177466e-17 0.7071067811865475 0.7071067811865476">
+                  <joint name="joint6" axis="0 0 1" range="-6.283185307179586 6.283185307179586" />
+                  <inertial mass="1" pos="0.0 3.7252903e-09 -0.029" diaginertia="0.0009110833 0.0009110833 0.0012615" />
+                  <geom type="mesh" mesh="link6_0" rgba="0.62353 0.62353 0.62353 1.0" contype="0" conaffinity="0" group="2" />
+                  <geom name="collision6" type="capsule" fromto="-0.018849999 3.7252903e-09 -0.029 0.018849999 3.7252903e-09 -0.029" size="0.024650000035762787" group="3" rgba=".6 .5 .1 .2" />
+                  <site name="attachment_site" size=".002" />
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <position name="joint1" joint="joint1" kp="2000" kv="180" forcerange="-150 150" />
+    <position name="joint2" joint="joint2" kp="2000" kv="180" forcerange="-150 150" />
+    <position name="joint3" joint="joint3" kp="2000" kv="180" forcerange="-150 150" />
+    <position name="joint4" joint="joint4" kp="500" kv="50" forcerange="-30 30" />
+    <position name="joint5" joint="joint5" kp="500" kv="50" forcerange="-30 30" />
+    <position name="joint6" joint="joint6" kp="500" kv="50" forcerange="-30 30" />
+  </actuator>
+  <contact>
+    <exclude body1="base" body2="link1" />
+  </contact>
+</mujoco>

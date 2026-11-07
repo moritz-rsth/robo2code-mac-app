@@ -1,0 +1,572 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prompt2Robo model duel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root { --font: "Geist", system-ui, sans-serif; --mono: "Geist Mono", ui-monospace, monospace;
+  --bg: #fbfbfa; --surface: #fff; --ink: #16171a; --muted: #6b6f76; --line: #e8e8e5; --link: #2f6fe4; --link-bg: #e9f0fd;
+  --ok: #1f9d55; --ok-bg: #edf8f1; --bad: #d93a3a; --bad-bg: #fdecec; --warn: #c98a0b; --warn-bg: #fdf5e3; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font); font-size: 15px; line-height: 1.45; -webkit-font-smoothing: antialiased; }
+main { max-width: 1440px; margin: 0 auto; padding: 14px 20px 32px; }
+h1 { font-size: 24px; font-weight: 600; letter-spacing: -0.02em; margin: 0; }
+.sub { color: var(--muted); font-weight: 300; margin: 4px 0 12px; font-size: 14px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 12px 16px; min-width: 0; }
+.controls { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 16px; }
+.ask { display: flex; flex-direction: column; min-width: 0; } .ask textarea { flex: 1 1 auto; }
+label.lab, .lab { display: block; font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 6px; }
+textarea { width: 100%; font: inherit; font-size: 15px; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; resize: vertical; background: var(--bg); color: var(--ink); }
+textarea:focus { outline: 2px solid var(--link-bg); border-color: var(--link); }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+button, select, #ncubes { font: inherit; font-size: 13px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 999px; padding: 5px 13px; cursor: pointer; }
+button:hover:enabled { border-color: var(--ink); }
+button:disabled { opacity: .4; cursor: default; }
+button.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); font-weight: 500; padding: 6px 20px; font-size: 14px; }
+select { padding: 5px 10px; }
+#ncubes { width: 84px; padding: 5px 4px 5px 12px; cursor: text; }
+canvas { width: 100%; aspect-ratio: 1 / 1; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); display: block; }
+canvas.orbit { cursor: grab; touch-action: none; } canvas.orbit:active { cursor: grabbing; }
+.scenehead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; } .scenehead .lab { margin: 0; }
+.toggle { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+.toggle button { border: 0; border-radius: 0; padding: 1px 10px; font-size: 12px; font-family: var(--mono); color: var(--muted); }
+.toggle button.on { background: var(--ink); color: var(--bg); }
+.cap { color: var(--muted); font-size: 11.5px; line-height: 1.3; }
+.under { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 0 0 8px; }
+.under button { font-size: 12px; padding: 2px 12px; }
+.duel { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; margin-top: 14px; }
+.side h2 { margin: 0; font-size: 15px; min-width: 0; font-weight: 600; display: flex; align-items: center; gap: 10px; }
+.side h2 > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.side h2 .st { margin-left: auto; flex: none; white-space: nowrap; font-family: var(--mono); font-size: 11.5px; color: var(--muted); font-weight: 400; }
+.screen { position: relative; margin: 8px auto; border-radius: 14px; overflow: hidden; background: #e9ebef; aspect-ratio: 16 / 9; width: 100%; max-width: 560px; }
+.screen img { width: 100%; height: 100%; object-fit: cover; display: none; }
+.screen .ph { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 13px; }
+.screen .tm { position: absolute; right: 10px; bottom: 8px; font-family: var(--mono); font-size: 11px; background: rgba(255,255,255,.8); padding: 1px 8px; border-radius: 999px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; min-height: 28px; }
+.tag { font-family: var(--mono); font-size: 12px; border-radius: 999px; padding: 3px 11px; background: var(--bg); border: 1px solid var(--line); }
+.tag.ok { background: var(--ok-bg); color: #1b6b3c; border-color: #bfe3cc; } .tag.bad { background: var(--bad-bg); color: #9e1f1f; border-color: #f3c4c4; }
+.tag.warn { background: var(--warn-bg); color: #845a05; border-color: #f0dcae; }
+pre { margin: 10px 0 0; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; font-family: var(--mono); font-size: 12px; line-height: 1.5; overflow: auto; min-height: 110px; max-height: 240px; white-space: pre-wrap; word-break: break-word; }
+.picker { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 0; align-items: center; }
+.picker select, .picker input { font: inherit; font-size: 12.5px; border: 1px solid var(--line); border-radius: 10px; padding: 5px 9px; background: var(--bg); color: var(--ink); min-width: 0; }
+.picker select.model { flex: 1 1 200px; width: 0; min-width: 0; text-overflow: ellipsis; }
+.picker input { flex: 1 1 200px; width: 0; }
+.picker[hidden] { display: none; }
+.basebar { font-size: 12.5px; color: var(--muted); margin-top: 6px; }
+.basebar .ok { color: #1b6b3c; } .basebar .down { color: #845a05; }
+.basebar select { flex: 0 1 320px; width: 0; }
+.picker textarea { font-family: var(--mono); font-size: 12px; line-height: 1.5; }
+dialog { border: 1px solid var(--line); border-radius: 16px; padding: 0; width: min(640px, calc(100vw - 32px)); margin-top: 12vh; color: var(--ink); background: var(--surface); }
+dialog::backdrop { background: rgba(22,23,26,.25); }
+.idbox { padding: 12px; } .idbox input { width: 100%; font: inherit; font-size: 14px; border: 1px solid var(--line); border-radius: 10px; padding: 7px 10px; background: var(--bg); color: var(--ink); }
+.idpick[hidden] { display: none; } .idpick { display: flex; gap: 8px; margin-bottom: 8px; } .idpick select { flex: 1; min-width: 0; }
+#idlist { margin-top: 8px; max-height: 50vh; overflow: auto; }
+#idlist button { display: block; width: 100%; text-align: left; border: 0; border-radius: 8px; padding: 5px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#idlist button:hover, #idlist button:focus { background: var(--link-bg); } #idlist b { font-family: var(--mono); font-weight: 500; font-size: 12px; } #idlist span, #idlist p { color: var(--muted); font-size: 12px; } #idlist p { margin: 6px 8px; }
+.sent { margin: 8px 0 0; font-size: 12.5px; color: var(--muted); }
+.sent summary { cursor: pointer; }
+.sent pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; color: var(--ink); }
+.sent mark { background: var(--link-bg); color: var(--link); border-radius: 4px; }
+details.settings { margin-bottom: 14px; } details.settings summary { cursor: pointer; font-weight: 500; }
+details.settings .row input { font: inherit; font-size: 13px; border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; min-width: 320px; background: var(--bg); }
+.hintline { color: var(--muted); font-size: 12.5px; margin-top: 6px; }
+.msg { margin-top: 10px; padding: 10px 14px; border-radius: 12px; background: var(--warn-bg); border: 1px solid #f0dcae; display: none; }
+.errs { font-family: var(--mono); font-size: 11.5px; color: var(--muted); margin-top: 6px; }
+@media (max-width: 900px) { .controls, .duel { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Prompt2Robo model duel</h1>
+  <p class="sub">One request, one scene, two models. Both write a robot program that runs in its own live MuJoCo simulation (our robot API).</p>
+
+  <details class="card settings" id="settings">
+    <summary>Settings: Hugging Face token &amp; model sources</summary>
+    <div class="row"><label class="lab" style="margin:0">HF token (for the private Prompt2Robo models)</label>
+      <input id="hftoken" type="password" placeholder="hf_..." autocomplete="off"><button id="savetok">Save</button><span id="tokstate" class="hintline"></span></div>
+    <p class="hintline">Pick a model for each side below, or choose <b>Other…</b> and paste a folder path or a Hugging Face link
+      (e.g. <code>https://huggingface.co/Carlo0001/Prompt2Robo-Qwen3-8B-MLX-4bit</code>). It is downloaded on first use.
+      With a token, all Prompt2Robo models of the account <code>moritzzzz</code> appear in both lists (↻ asks Hugging Face again).
+      The public models need no token. The shared copy of the app has a read-only token built in; the GitHub version does not. A token you type here stays in this browser and in the app's memory, it is never written to disk. Models found automatically:
+      <code>mac_app/models</code> and the training output folder.</p>
+  </details>
+
+  <div class="card controls">
+    <div class="ask">
+      <label class="lab" for="instr">Request</label>
+      <textarea id="instr" rows="3" placeholder="Put the red cube on top of the blue cube."></textarea>
+      <div class="row">
+        <span class="lab" style="margin:0">Scene</span>
+        <input id="ncubes" type="number" min="1" step="1" value="3" aria-label="Number of cubes" title="Number of cubes, at least 1. Training scenes had at most 6.">
+        <button id="newscene">New random scene</button>
+        <button id="loadex">Load a test example</button>
+        <button id="loadid" title="find an example of any dataset version by its id">ID</button>
+        <span style="flex:1"></span>
+        <label class="lab" style="margin:0">Speed</label>
+        <select id="speed"><option value="1">1x</option><option value="2">2x</option><option value="4" selected>4x</option><option value="8">8x</option><option value="20">20x</option></select>
+        <button id="rpboth" disabled title="replay both simulations from the recorded frames">Replay both</button>
+        <button id="run-base">Run left</button><button id="run-finetuned">Run right</button><button class="primary" id="run">Run both</button>
+      </div>
+      <div class="row" style="margin-top:6px"><span id="hint" style="color:var(--muted);font-size:13px"></span><span class="cap" id="cubenote"></span></div>
+    </div>
+    <div class="scene">
+      <div class="scenehead"><span class="lab" id="maplab">Scene layout</span><span class="toggle"><button id="v2d">2D</button><button id="v3d">3D</button></span></div>
+      <canvas id="map"></canvas>
+      <div class="cap" id="mapcap" style="margin-top:5px"></div>
+    </div>
+  </div>
+
+  <div class="duel">
+    <section class="card side" id="s-base"></section>
+    <section class="card side" id="s-finetuned"></section>
+  </div>
+</main>
+<dialog id="iddlg"><div class="idbox"><div class="idpick"><select id="idds" aria-label="Dataset"></select><select id="idsplit" aria-label="Split"></select></div><input id="idq" placeholder="search by id" autocomplete="off" spellcheck="false" aria-label="Search examples by id"><div id="idlist"></div></div></dialog>
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+let scene = null, exampleId = null, exampleDataset = null, es = null;
+
+function sideHTML(id, label) {
+  return `<h2><span id="l-${id}">${label}</span><span class="st" id="st-${id}">idle</span></h2>
+    <div class="picker"><select class="model" id="sel-${id}"></select><button id="rs-${id}" title="rescan folders and the Hugging Face account">↻</button><select id="pf-${id}" title="what the model gets besides the request. Auto = the format this model was trained with"><option value="auto">prompt: auto</option><option value="objects">prompt: Objects line</option><option value="scene">prompt: Scene_Info JSON</option></select></div>
+    <div class="picker basebar" id="bb-${id}" hidden><span id="bt-${id}"></span><select id="ba-${id}" title="the MLX base this adapter runs on. The adapter's own base is the one it was made for" hidden></select></div>
+    <div class="picker" id="cu-${id}" hidden><input id="in-${id}" placeholder="folder path or Hugging Face link"><select id="tp-${id}" title="chat template"><option value="auto">template: auto</option><option value="nothinking">non-thinking</option><option value="thinking">thinking</option></select><button id="ld-${id}">Load</button></div>
+    <div class="picker" id="mw-${id}" hidden><textarea id="mc-${id}" rows="9" spellcheck="false" aria-label="Manual code" placeholder="def run(robot):\n    p = robot.get_object_position('1')\n    ..."></textarea></div>
+    <details class="sent" id="pd-${id}"><summary>Prompt sent to the model</summary><pre id="pu-${id}">nothing sent yet</pre>
+      <details><summary>System prompt</summary><pre id="ps-${id}"></pre></details></details>
+    <div class="screen"><img id="img-${id}" alt=""><div class="ph" id="ph-${id}">waiting for a run</div><span class="tm" id="tm-${id}" hidden></span></div>
+    <div class="under"><button id="rp-${id}" disabled title="no recorded frames yet">Replay</button><span class="cap">Floor grid: 1 cell = 10 cm, bold lines every 1 m</span></div>
+    <div class="chips" id="ch-${id}"></div><div class="errs" id="er-${id}"></div>
+    <div class="msg" id="ms-${id}"></div>
+    <pre id="code-${id}"></pre>`;
+}
+
+// ---- scene layout: 2D top view or a 3D view to orbit. World: x 0..0.8 (front), y -0.4..0.4 (+y = left), z up; the robot base is the origin.
+const CUBE = 0.04, CELL = 0.1;
+const CUBE_RGB = { red: [.85, .1, .1], blue: [.1, .2, .85], green: [.1, .7, .2], yellow: [.95, .85, .1], orange: [1, .55, 0], purple: [.55, .2, .7], white: [.95, .95, .95],
+  black: [.1, .1, .1], pink: [1, .5, .7], brown: [.5, .3, .1], gray: [.5, .5, .5], grey: [.5, .5, .5], cyan: [.1, .8, .85] };    // as in sim/scene.py
+const rgb = (c, k = 1) => `rgb(${c.map((v) => Math.round(Math.min(v * k, 1) * 255)).join(",")})`;
+const cubeRGB = (name) => CUBE_RGB[name] || [.6, .6, .6];
+const VIEW0 = { az: 3.6, el: 0.6, dist: 1.5 };
+const view = { mode: "3d", ...VIEW0 };
+
+function canvasCtx() {
+  const c = $("#map"), dpr = window.devicePixelRatio || 1, W = c.clientWidth, H = c.clientHeight;
+  if (c.width !== Math.round(W * dpr) || c.height !== Math.round(H * dpr)) { c.width = Math.round(W * dpr); c.height = Math.round(H * dpr); }
+  const g = c.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+  return [g, W, H];
+}
+function drawMap() {
+  $("#map").classList.toggle("orbit", view.mode === "3d");
+  $("#v2d").classList.toggle("on", view.mode === "2d"); $("#v3d").classList.toggle("on", view.mode === "3d");
+  $("#maplab").textContent = view.mode === "3d" ? "Scene layout (3D)" : "Scene layout (top view)";
+  $("#mapcap").textContent = "1 cell = 10 cm" + (view.mode === "3d" ? " · drag to orbit, wheel or pinch to zoom, double-click resets" : "");
+  (view.mode === "3d" ? draw3D : draw2D)();
+}
+
+function draw2D() {
+  const [g, W, H] = canvasCtx();
+  const k = (Math.min(W, H) - 34) / 0.8, X = (y) => W / 2 - y * k, Y = (x) => H - 22 - x * k;
+  g.strokeStyle = "#e8e8e5"; g.lineWidth = 1; g.beginPath();
+  for (let i = 0; i <= 8; i++) { g.moveTo(X(-0.4), Y(i * CELL)); g.lineTo(X(0.4), Y(i * CELL)); g.moveTo(X(i * CELL - 0.4), Y(0)); g.lineTo(X(i * CELL - 0.4), Y(0.8)); }
+  g.stroke();
+  g.fillStyle = "#6b6f76"; g.font = "11px Geist Mono, monospace"; g.fillText("robot", W / 2 - 16, H - 4); g.fillText("front", W / 2 - 14, 11); g.fillText("left", 3, H / 2); g.fillText("right", W - 33, H / 2);
+  g.beginPath(); g.arc(X(0), Y(0), 6, 0, 6.3); g.fillStyle = "#555"; g.fill();
+  if (!scene) return;
+  const cubes = Object.entries(scene.objects).sort((a, b) => a[1].position[2] - b[1].position[2]), seen = {};
+  for (const [id, o] of cubes) {                                       // lowest first, so the top of a tower stays visible
+    const s = CUBE * k, p = o.position, at = `${p[0]},${p[1]}`, row = seen[at] = (seen[at] || 0) + 1;
+    g.fillStyle = rgb(cubeRGB(o.color)); g.fillRect(X(p[1]) - s / 2, Y(p[0]) - s / 2, s, s);
+    g.strokeStyle = "#16171a"; g.lineWidth = 1; g.strokeRect(X(p[1]) - s / 2, Y(p[0]) - s / 2, s, s);
+    g.fillStyle = "#16171a"; g.fillText(id + (p[2] > 0.03 ? ` z${p[2]}` : ""), X(p[1]) + s / 2 + 3, Y(p[0]) + 4 + (row - 1) * 11);
+  }
+}
+
+function camera3D(W, H) {
+  const tgt = [0.38, 0, 0.04], { az, el, dist } = view, ce = Math.cos(el);
+  const eye = [tgt[0] + dist * ce * Math.cos(az), tgt[1] + dist * ce * Math.sin(az), tgt[2] + dist * Math.sin(el)];
+  const f = [-ce * Math.cos(az), -ce * Math.sin(az), -Math.sin(el)], rn = Math.hypot(f[1], f[0]) || 1, r = [f[1] / rn, -f[0] / rn, 0];
+  const u = [r[1] * f[2] - r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1] - r[1] * f[0]], k = 1.35 * Math.min(W, H);
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2], sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  const depth = (p) => dot(sub(p, eye), f);
+  const toScreen = (p) => { const d = sub(p, eye), z = dot(d, f); return [W / 2 + k * dot(d, r) / z, H / 2 - k * dot(d, u) / z]; };
+  return { eye, depth, toScreen };
+}
+function draw3D() {
+  const [g, W, H] = canvasCtx(), cam = camera3D(W, H), NEAR = 0.05;
+  const cut = (a, b) => { const da = cam.depth(a), t = (da - NEAR) / (da - cam.depth(b)); return a.map((v, i) => v + t * (b[i] - v)); };
+  const clip = (pts) => { const out = []; pts.forEach((p, i) => { const q = pts[(i + 1) % pts.length], pin = cam.depth(p) > NEAR, qin = cam.depth(q) > NEAR; if (pin) out.push(p); if (pin !== qin) out.push(cut(p, q)); }); return out; };
+  const poly = (pts, fill, stroke) => { const c = clip(pts); if (c.length < 3) return; g.beginPath(); c.forEach((p, i) => { const s = cam.toScreen(p); i ? g.lineTo(s[0], s[1]) : g.moveTo(s[0], s[1]); }); g.closePath(); if (fill) { g.fillStyle = fill; g.fill(); } if (stroke) { g.strokeStyle = stroke; g.stroke(); } };
+  const line = (a, b, color, w = 1) => { let p = a, q = b; const pin = cam.depth(p) > NEAR, qin = cam.depth(q) > NEAR; if (!pin && !qin) return; if (!pin) p = cut(p, q); if (!qin) q = cut(a, b); const s = cam.toScreen(p), e = cam.toScreen(q); g.strokeStyle = color; g.lineWidth = w; g.beginPath(); g.moveTo(s[0], s[1]); g.lineTo(e[0], e[1]); g.stroke(); };
+  const text = (p, str, color = "#6b6f76", font = "11px Geist Mono, monospace", keep = false) => { if (cam.depth(p) <= NEAR) return; const s = cam.toScreen(p); if (keep) { s[0] = Math.min(W - 22, Math.max(22, s[0])); s[1] = Math.min(H - 9, Math.max(9, s[1])); } g.font = font; g.fillStyle = color; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(str, s[0], s[1]); g.textAlign = "start"; g.textBaseline = "alphabetic"; };
+  // a straight prism on a floor outline (cube = square, robot base = 16-gon): only the faces that look at the camera, so no sorting inside one solid
+  const prism = (ring, z0, z1, color) => {
+    const n = ring.length; g.lineWidth = 0.7; g.lineJoin = "round";
+    ring.forEach((a, i) => {
+      const b = ring[(i + 1) % n], nx = b[1] - a[1], ny = a[0] - b[0];
+      if (nx * (cam.eye[0] - a[0]) + ny * (cam.eye[1] - a[1]) <= 0) return;
+      const shade = 0.72 + 0.2 * (nx * 0.6 - ny * 0.8) / Math.hypot(nx, ny), fill = rgb(color, shade);
+      poly([[a[0], a[1], z0], [b[0], b[1], z0], [b[0], b[1], z1], [a[0], a[1], z1]], fill, n > 4 ? fill : "rgba(22,23,26,.55)");
+    });
+    if (cam.eye[2] > z1) poly(ring.map((p) => [p[0], p[1], z1]), rgb(color), n > 4 ? null : "rgba(22,23,26,.55)");
+    else if (cam.eye[2] < z0) poly(ring.map((p) => [p[0], p[1], z0]), rgb(color, 0.6), null);
+  };
+  g.fillStyle = "#eef0f3"; g.fillRect(0, 0, W, H);
+  const x0 = -0.2, x1 = 1.0, y0 = -0.6, y1 = 0.6;                      // the floor around the workspace, grid lines on multiples of 10 cm from the origin as in the simulation
+  poly([[x0, y0, 0], [x1, y0, 0], [x1, y1, 0], [x0, y1, 0]], "#ccbfa6");
+  for (let i = 0; i <= 12; i++) { const x = x0 + i * CELL, y = y0 + i * CELL; line([x, y0, 0], [x, y1, 0], "#a89b82"); line([x0, y, 0], [x1, y, 0], "#a89b82"); }
+  poly([[0, -0.4, 0], [0.8, -0.4, 0], [0.8, 0.4, 0], [0, 0.4, 0]], null, "#6b6252");
+  const objs = scene ? Object.entries(scene.objects) : [];
+  for (const [, o] of objs) { const [x, y] = o.position, h = CUBE / 2; poly([[x - h, y - h, 0], [x + h, y - h, 0], [x + h, y + h, 0], [x - h, y + h, 0]], "rgba(22,23,26,.22)"); }
+  const items = objs.map(([id, o]) => {
+    const [x, y, z] = o.position, h = CUBE / 2;
+    return { at: [x, y, z], draw: () => prism([[x - h, y - h], [x + h, y - h], [x + h, y + h], [x - h, y + h]], z - h, z + h, cubeRGB(o.color)) };
+  });
+  const circle = Array.from({ length: 16 }, (_, i) => [0.07 * Math.cos(i * Math.PI / 8), 0.07 * Math.sin(i * Math.PI / 8)]);
+  items.push({ at: [0, 0, 0.06], draw: () => prism(circle, 0, 0.12, [.3, .3, .3]) });
+  if (scene && scene.gripper) {
+    const p = scene.gripper.position;
+    items.push({ at: p, draw: () => { line([p[0], p[1], 0], p, "rgba(22,23,26,.45)"); const s = cam.toScreen(p); if (cam.depth(p) > NEAR) { g.fillStyle = "#16171a"; g.beginPath(); g.arc(s[0], s[1], 3, 0, 6.3); g.fill(); } } });
+  }
+  const far = (p) => Math.hypot(p[0] - cam.eye[0], p[1] - cam.eye[1], p[2] - cam.eye[2]);
+  items.sort((a, b) => far(b.at) - far(a.at)).forEach((it) => it.draw());      // far to near
+  line([0, 0, 0.125], [0.2, 0, 0.125], "#d33", 2); line([0, 0, 0.125], [0, 0.2, 0.125], "#1a9c3e", 2); line([0, 0, 0.125], [0, 0, 0.3], "#2a55d9", 2);
+  text([0.23, 0, 0.125], "x", "#d33"); text([0, 0.23, 0.125], "y", "#1a9c3e"); text([0, 0, 0.32], "z", "#2a55d9");
+  for (const [p, name] of [[[0.93, 0, 0], "front"], [[0.4, 0.5, 0], "left"], [[0.4, -0.5, 0], "right"], [[-0.14, 0, 0], "robot"]]) text(p, name, "#6b6f76", undefined, true);
+  if (scene && scene.gripper) { const p = scene.gripper.position; text([p[0], p[1], p[2] + 0.035], "gripper"); }
+  for (const [id, o] of objs) {
+    const [x, y, z] = o.position, c = cubeRGB(o.color), light = c[0] * .3 + c[1] * .6 + c[2] * .1 > .55;
+    text([x, y, z + CUBE / 2], id, light ? "#16171a" : "#fff", "600 10px Geist Mono, monospace");
+  }
+}
+function setupView() {
+  const c = $("#map"), ptrs = new Map(); let pinch = 0;
+  const zoom = (f) => { view.dist = Math.min(4, Math.max(0.45, view.dist * f)); drawMap(); };
+  $("#v2d").onclick = () => { view.mode = "2d"; drawMap(); };
+  $("#v3d").onclick = () => { view.mode = "3d"; drawMap(); };
+  c.addEventListener("pointerdown", (e) => { if (view.mode !== "3d") return; c.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, [e.clientX, e.clientY]); pinch = 0; });
+  c.addEventListener("pointermove", (e) => {
+    const p = ptrs.get(e.pointerId); if (!p) return;
+    const dx = e.clientX - p[0], dy = e.clientY - p[1]; ptrs.set(e.pointerId, [e.clientX, e.clientY]);
+    if (ptrs.size === 1) { view.az -= dx * 0.01; view.el = Math.min(1.55, Math.max(0.04, view.el + dy * 0.01)); drawMap(); }
+    else if (ptrs.size === 2) { const [a, b] = [...ptrs.values()], d = Math.hypot(a[0] - b[0], a[1] - b[1]); if (pinch) zoom(pinch / d); pinch = d; }
+  });
+  for (const ev of ["pointerup", "pointercancel"]) c.addEventListener(ev, (e) => { ptrs.delete(e.pointerId); pinch = 0; });
+  c.addEventListener("wheel", (e) => { if (view.mode !== "3d") return; e.preventDefault(); zoom(Math.exp(e.deltaY * 0.001)); }, { passive: false });
+  c.addEventListener("dblclick", () => { if (view.mode === "3d") { Object.assign(view, VIEW0); drawMap(); } });
+  new ResizeObserver(drawMap).observe(c);
+}
+
+async function post(url, body) { return (await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json(); }
+// Whatever is in the cube field -> a whole number of at least 1, and the field shows it. Empty or nonsense keeps the last good value.
+let colorCount = 12, trainedCubes = 6, goodCubes = 3, sceneCubes = 0, sceneAsked = 0;
+function cubeCount() {
+  const raw = $("#ncubes").value.trim(), v = Math.round(Number(raw));
+  if (raw !== "" && Number.isFinite(v)) goodCubes = Math.max(1, v);
+  $("#ncubes").value = goodCubes; cubeNote();
+  return goodCubes;
+}
+function cubeNote() {
+  const n = +$("#ncubes").value;
+  $("#cubenote").textContent = n > colorCount ? `training scenes had at most ${trainedCubes}; colours repeat, use the ids` : n > trainedCubes ? `training scenes had at most ${trainedCubes}` : "";
+}
+async function newScene() {
+  const n = sceneCubes = cubeCount(), asked = ++sceneAsked;
+  const r = await post("/api/scene", { n_cubes: n, seed: Math.floor(Math.random() * 1e6) });
+  if (asked !== sceneAsked) return;                                     // a newer request is on its way
+  const placed = Object.keys(r.scene.objects).length;
+  scene = r.scene; exampleId = exampleDataset = null; $("#hint").textContent = placed < n ? `Only ${placed} cubes fit on the table, so this scene has ${placed}.` : ""; drawMap();
+}
+
+async function init() {
+  const cfg = await (await fetch("/api/config")).json();
+  $("#s-base").innerHTML = sideHTML("base", "Base model"); $("#s-finetuned").innerHTML = sideHTML("finetuned", "Fine-tuned model");
+  setupView(); await setupSettings(); await setupPickers(cfg.status);
+  window.examples = cfg.examples; window.datasets = cfg.datasets;
+  trainedCubes = cfg.trained_cubes; colorCount = cfg.colors;
+  $("#loadex").disabled = $("#loadid").disabled = !cfg.examples.length;
+  $("#newscene").onclick = newScene;
+  $("#ncubes").oninput = cubeNote;
+  $("#ncubes").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); newScene(); } };
+  $("#ncubes").onchange = () => { if (cubeCount() !== sceneCubes) newScene(); };      // arrows or leaving the field; Enter has already asked
+  $("#loadex").onclick = () => loadExample(examples[Math.floor(Math.random() * examples.length)]);
+  setupIdSearch();
+  $("#run").onclick = () => run(SIDES);
+  for (const s of SIDES) $(`#run-${s}`).onclick = () => run([s]);
+  for (const s of SIDES) $(`#rp-${s}`).onclick = () => (rec[s].play ? stopReplay([s]) : startReplay([s]));
+  $("#rpboth").onclick = () => (SIDES.some((s) => rec[s].play) ? stopReplay() : startReplay(SIDES));
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") stopReplay(); });
+  await newScene();
+  if (location.hash === "#autorun") { $("#instr").value = "Put the red cube on top of the blue cube."; setTimeout(run, 500); }
+}
+
+function loadExample(e) {
+  $("#instr").value = e.instruction; scene = e.scene; exampleId = e.id; exampleDataset = e.dataset || null; sceneCubes = 0; drawMap();
+  const kind = e.split === "train" ? "training example" : e.split === "" ? "example" : "held-out test example";
+  $("#hint").textContent = `${kind} (${[e.dataset, e.split, e.subcategory].filter(Boolean).join(", ")}): success is checked automatically`;
+}
+// The ID button: find an example by id. A side in Manual code mode also gets the example's reference answer, if it is a program.
+async function pickExample(e) {
+  $("#iddlg").close(); loadExample(e);
+  const manual = SIDES.filter(isManual);
+  if (!manual.length) return;
+  const a = await (await fetch("/api/answer/" + encodeURIComponent(e.id) + (e.dataset ? "?dataset=" + e.dataset : ""))).json();
+  if (a.program) for (const s of manual) $(`#mc-${s}`).value = a.answer;
+  else $("#hint").textContent += " · this sample's answer is a refusal, so the code box stays as it was";
+}
+function setupIdSearch() {
+  const dlg = $("#iddlg"), q = $("#idq"), list = $("#idlist"), ds = $("#idds"), sp = $("#idsplit"), SHOW = 60, loaded = {};
+  let rows = examples;
+  ds.append(...datasets.map((n) => new Option(n, n)));
+  $(".idpick").hidden = !datasets.length;                             // no datasets folder: the held-out examples, as before
+  const hits = () => rows.filter((e) => (!sp.value || e.split === sp.value) && e.id.toLowerCase().includes(q.value.trim().toLowerCase()));
+  const show = () => {
+    const found = hits(); list.innerHTML = "";
+    for (const e of found.slice(0, SHOW)) {
+      const b = document.createElement("button"), id = document.createElement("b"), rest = document.createElement("span");
+      id.textContent = e.id; rest.textContent = `  ${e.subcategory} · ${e.instruction.split(/\s+/).slice(0, 8).join(" ")}`; b.append(id, rest); b.onclick = () => pickExample(e); list.append(b);
+    }
+    if (!found.length || found.length > SHOW) { const n = document.createElement("p"); n.textContent = found.length ? `${found.length - SHOW} more, type to narrow it down` : "no example here with this id"; list.append(n); }
+  };
+  const pickDataset = async () => {
+    const name = ds.value;
+    if (!name) return show();
+    list.textContent = "loading…";
+    loaded[name] = loaded[name] || (await (await fetch("/api/dataset/" + name)).json()).rows;
+    if (name !== ds.value) return;                                    // another dataset was picked meanwhile
+    const keep = sp.value, splits = [...new Set(loaded[name].map((e) => e.split))].filter(Boolean).sort();
+    rows = loaded[name]; sp.replaceChildren(new Option(`all splits (${rows.length})`, ""), ...splits.map((n) => new Option(`${n} (${rows.filter((e) => e.split === n).length})`, n)));
+    sp.hidden = !splits.length; sp.value = splits.includes(keep) ? keep : ""; show();
+  };
+  $("#loadid").onclick = () => { q.value = ""; dlg.showModal(); q.focus(); pickDataset(); };
+  ds.onchange = pickDataset; sp.onchange = show; q.oninput = show;
+  q.onkeydown = (ev) => { if (ev.key === "Enter") { ev.preventDefault(); const e = hits()[0]; if (e) pickExample(e); } };
+  dlg.onclick = (ev) => { if (ev.target === dlg) dlg.close(); };      // the padding-free dialog itself is only hit outside its box
+}
+
+const SIDES = ["base", "finetuned"];
+let models = [], bases = [], hasToken = false, status = {}, sawLoading = false;
+async function setupSettings() {
+  const t = localStorage.getItem("p2r_hf_token") || "";
+  $("#hftoken").value = t;
+  const save = async () => { const v = $("#hftoken").value.trim(); localStorage.setItem("p2r_hf_token", v); $("#tokstate").textContent = v ? "asking Hugging Face…" : ""; await post("/api/settings", { hf_token: v }); await refreshModels(false); };
+  $("#savetok").onclick = save; if (t) await save();
+}
+function showToken(r) {
+  $("#tokstate").textContent = r.note || (r.has_token ? `token set for this session, ${r.hf_models} Prompt2Robo models in the lists` : "no token");
+  if (r.note) $("#settings").open = true;
+}
+async function refreshModels(ask) {
+  const r = await (await fetch("/api/models" + (ask ? "?refresh=1" : ""))).json();
+  models = r.models; bases = r.bases; hasToken = r.has_token; status = r.status; showToken(r);
+  for (const side of SIDES) fillSelect(side, r.status[side]);
+  return r;
+}
+function fillSelect(side, st) {
+  const sel = $(`#sel-${side}`), before = sel.value, selectedLabel = st.label; sel.innerHTML = "";
+  let group = null;
+  for (const [i, m] of models.entries()) {
+    if (!group || group.label !== m.group) { group = document.createElement("optgroup"); group.label = m.group; sel.append(group); }
+    const o = document.createElement("option"); o.value = m.path; o.textContent = `${m.label} · ${m.avail}`; group.append(o);
+  }
+  if (!hasToken) { const o = document.createElement("option"); o.disabled = true; o.textContent = "Private Prompt2Robo models: add a Hugging Face token in Settings"; sel.prepend(o); }
+  const other = document.createElement("option"); other.value = "__custom__"; other.textContent = "Other…  (paste a folder path or Hugging Face link)"; sel.append(other);
+  const hit = models.find((m) => selectedLabel && (selectedLabel === m.label || selectedLabel.startsWith(m.label + " · on ") || (selectedLabel.startsWith(m.label.split("  ·  ")[0]) && selectedLabel.includes(m.where || ""))));
+  const manual = document.createElement("option"); manual.value = "__manual__"; manual.textContent = "Manual code  (paste a program, no model)"; sel.append(manual);
+  if (st.manual) sel.value = "__manual__"; else if (before === "__custom__") sel.value = before; else if (hit) sel.value = hit.path; else if (before) sel.value = before;
+  if (!sel.value) sel.value = (models[0] || {}).path || "__custom__";
+  fillBases(side, hit && hit.path === sel.value && st.base_info ? st.base_info.path : null);
+  showMode(side);
+}
+const isManual = (side) => $(`#sel-${side}`).value === "__manual__";
+function showMode(side) {
+  const v = $(`#sel-${side}`).value, manual = v === "__manual__";
+  $(`#cu-${side}`).hidden = v !== "__custom__"; $(`#mw-${side}`).hidden = !manual; $(`#code-${side}`).hidden = manual; $(`#pf-${side}`).disabled = manual;
+}
+const chosen = (side) => models.find((m) => m.path === $(`#sel-${side}`).value);
+// The dropdown of an MLX adapter: the MLX bases of the list, the adapter's own one selected unless this side already runs on another.
+function fillBases(side, loaded) {
+  const m = chosen(side), sel = $(`#ba-${side}`), keep = sel.dataset.model === (m || {}).path ? sel.value : null;
+  sel.innerHTML = ""; sel.dataset.model = (m || {}).path || ""; sel.hidden = !m || m.adapter !== "mlx";
+  if (!sel.hidden) {
+    const own = m.base_info, list = bases.some((b) => b.path === own.path) ? bases : [own, ...bases];
+    for (const b of list) { const o = document.createElement("option"); o.value = b.path; o.textContent = `${b.name}${b.path === own.path ? " (its own base)" : ""} · ${b.short}`; sel.append(o); }
+    sel.value = [keep, loaded, own.path].find((p) => list.some((b) => b.path === p));
+  }
+  showBase(side);
+}
+// Which base the selected adapter needs and whether it is here. Pasted under Other…, the adapter is known only once it is loaded.
+function showBase(side) {
+  const m = chosen(side), sel = $(`#ba-${side}`), bar = $(`#bb-${side}`), text = $(`#bt-${side}`);
+  const custom = $(`#sel-${side}`).value === "__custom__";
+  const b = m ? (m.adapter === "mlx" && bases.find((x) => x.path === sel.value)) || (m.adapter && m.base_info) : custom && (status[side] || {}).base_info;
+  bar.hidden = !b; text.textContent = "";
+  if (!b) return;
+  const part = (txt, cls) => { const n = document.createElement("span"); n.textContent = txt; if (cls) n.className = cls; text.append(n); };
+  part(`Base: ${b.name} `); part(b.avail, b.on_mac ? "ok" : "down");
+  if (m && m.adapter === "peft") part(" · slow: runs through transformers, needs torch and peft");
+}
+async function loadSide(side, path, custom) {
+  const m = custom ? null : chosen(side), base = m && m.adapter === "mlx" ? $(`#ba-${side}`).value : null;
+  const r = await post("/api/load", { side, path, custom: !!custom, template: $(`#tp-${side}`).value, base });
+  $(`#st-${side}`).textContent = "loading model"; pollStatus();
+}
+async function setupPickers(status) {
+  await refreshModels(false);
+  for (const side of SIDES) {
+    $(`#sel-${side}`).onchange = async (ev) => {
+      const v = ev.target.value; showMode(side); fillBases(side, null);
+      if (v === "__manual__") { await post("/api/load", { side, manual: true }); $(`#st-${side}`).textContent = "ready"; pollStatus(); }
+      else if (v !== "__custom__") loadSide(side, v, false);
+    };
+    $(`#ba-${side}`).onchange = () => { showBase(side); loadSide(side, $(`#sel-${side}`).value, false); };
+    $(`#ld-${side}`).onclick = () => { const p = $(`#in-${side}`).value.trim(); if (p) loadSide(side, p, true); };
+    $(`#rs-${side}`).onclick = () => refreshModels(true);
+  }
+  pollStatus();
+}
+let poller = null;
+function pollStatus() {
+  if (poller) return;
+  const tick = async () => {
+    const st = status = await (await fetch("/api/status")).json();
+    let busy = false, allReady = true;
+    for (const side of SIDES) {
+      const s = st[side]; $(`#l-${side}`).textContent = s.label || (side === "base" ? "Base model" : "Fine-tuned model");
+      const t = $(`#st-${side}`);
+      if (s.state === "loading") { busy = true; t.textContent = "loading model…"; } else if (s.state === "error") { t.textContent = "load failed"; $(`#er-${side}`).textContent = s.error; } else if (s.state === "ready") { if (t.textContent.startsWith("loading") || t.textContent === "idle" || t.textContent === "load failed") t.textContent = "ready"; $(`#er-${side}`).textContent = ""; }
+      ready[side] = s.state === "ready";
+      if (s.state !== "ready") allReady = false;
+    }
+    runButtons();
+    for (const side of SIDES) showBase(side);
+    if (busy) sawLoading = true;
+    else {
+      clearInterval(poller); poller = null;
+      if (sawLoading) { sawLoading = false; refreshModels(false); }     // a load may have downloaded something: ✓ on this Mac
+    }
+  };
+  poller = setInterval(tick, 1200); tick();
+}
+
+// The exact prompt of this run: your request as plain text, everything the app added around it highlighted.
+function showSent(side, e) {
+  const box = $(`#pu-${side}`), i = e.user.indexOf(e.request);
+  box.textContent = "";
+  const add = (txt, marked) => { if (txt) { const n = document.createElement(marked ? "mark" : "span"); n.textContent = txt; box.append(n); } };
+  if (i < 0) add(e.user, false);
+  else { add(e.user.slice(0, i), true); add(e.request, false); add(e.user.slice(i + e.request.length), true); }
+  $(`#ps-${side}`).textContent = e.system;
+}
+function reset(side) {
+  $(`#code-${side}`).textContent = ""; $(`#ch-${side}`).innerHTML = ""; $(`#er-${side}`).textContent = ""; $(`#ms-${side}`).style.display = "none";
+  $(`#img-${side}`).style.display = "none"; $(`#ph-${side}`).style.display = "grid"; $(`#ph-${side}`).textContent = "waiting for the model"; $(`#tm-${side}`).hidden = true;
+}
+// ---- replay: every side records its frames during a run. MAX_FRAMES bounds the memory (about 50 MB per side): when it is reached, every second
+// frame is dropped and from then on only every 2nd (4th, ...) frame is kept, so a long run stays complete, just with fewer frames per second.
+const MAX_FRAMES = 1200;
+const newRec = () => ({ frames: [], stride: 1, n: 0, last: null, live: false, play: null });
+const rec = { base: newRec(), finetuned: newRec() };
+let replayRaf = null, replayClock = 0;
+function record(s, e) {
+  const r = rec[s], f = { jpg: e.jpg, sim_s: e.sim_s }; r.last = f;
+  if (r.n++ % r.stride) return;
+  r.frames.push(f);
+  if (r.frames.length >= MAX_FRAMES) { r.frames = r.frames.filter((_, i) => i % 2 === 0); r.stride *= 2; }
+}
+function endRecording(s) {
+  const r = rec[s]; r.live = false;
+  if (r.last && r.frames[r.frames.length - 1] !== r.last) r.frames.push(r.last);     // the end state is never thinned away
+  replayButtons();
+}
+function showFrame(s, f, replaying) {
+  const im = $(`#img-${s}`), t = $(`#tm-${s}`);
+  im.src = "data:image/jpeg;base64," + f.jpg; im.style.display = "block"; $(`#ph-${s}`).style.display = "none";
+  t.hidden = false; t.textContent = `${replaying ? "replay · " : ""}sim ${f.sim_s.toFixed(1)} s`;
+}
+function replayButtons() {
+  for (const s of SIDES) {
+    const b = $(`#rp-${s}`), r = rec[s];
+    b.disabled = r.live || !r.frames.length; b.textContent = r.play ? "Stop replay" : "Replay";
+    b.title = r.live ? "wait for the run to end" : r.frames.length ? `replay ${r.frames.length} recorded frames at the chosen speed` : "no recorded frames: nothing was simulated";
+  }
+  const both = $("#rpboth"), ready = SIDES.filter((s) => !rec[s].live && rec[s].frames.length);
+  both.disabled = !ready.length || SIDES.some((s) => rec[s].live); both.textContent = SIDES.some((s) => rec[s].play) ? "Stop replay" : "Replay both";
+}
+function startReplay(sides) {
+  for (const s of sides) { const r = rec[s]; if (r.live || !r.frames.length) continue; r.play = { i: 0, t: r.frames[0].sim_s }; showFrame(s, r.frames[0], true); }
+  if (!replayRaf && SIDES.some((s) => rec[s].play)) { replayClock = performance.now(); replayRaf = requestAnimationFrame(replayTick); }
+  replayButtons();
+}
+function stopReplay(sides = SIDES) {                                    // the screen goes back to the end of the run
+  for (const s of sides) { const r = rec[s]; if (!r.play) continue; r.play = null; showFrame(s, r.frames[r.frames.length - 1], false); }
+  replayButtons();
+}
+function replayTick(now) {
+  const dt = (now - replayClock) / 1000 * +$("#speed").value; replayClock = now; replayRaf = null;
+  for (const s of SIDES) {
+    const r = rec[s], p = r.play; if (!p) continue;
+    p.t += dt; const i0 = p.i;
+    while (p.i + 1 < r.frames.length && r.frames[p.i + 1].sim_s <= p.t) p.i++;
+    if (p.i === r.frames.length - 1) stopReplay([s]); else if (p.i !== i0) showFrame(s, r.frames[p.i], true);
+  }
+  if (SIDES.some((s) => rec[s].play)) replayRaf = requestAnimationFrame(replayTick);
+}
+
+const tag = (side, text, cls = "") => { const t = document.createElement("span"); t.className = "tag " + cls; t.textContent = text; $(`#ch-${side}`).append(t); };
+
+// Run left / right / both: a button works when its models are ready and nothing is running.
+const ready = {}; let running = false;
+function runButtons() {
+  for (const s of SIDES) $(`#run-${s}`).disabled = running || !ready[s];
+  $("#run").disabled = running || !SIDES.every((s) => ready[s]);
+}
+// A manual side needs no request. With an empty request box only the manual sides run, a model side says why it did not.
+function run(sides = SIDES) {
+  const instruction = $("#instr").value.trim(), manual = {};
+  for (const s of sides) if (isManual(s)) manual[s] = $(`#mc-${s}`).value;
+  const skipped = instruction ? [] : sides.filter((s) => !(s in manual));
+  sides = sides.filter((s) => !skipped.includes(s));
+  if (!sides.length || !scene) return;
+  for (const s of skipped) { $(`#st-${s}`).textContent = "needs a request"; $("#hint").textContent = "The request box is empty, so only the manual side ran."; }
+  if (es) es.close();
+  stopReplay();
+  for (const s of sides) { reset(s); rec[s] = newRec(); rec[s].live = true; }
+  replayButtons();
+  running = true; runButtons();
+  post("/api/run", { instruction, scene, sides, manual, example_id: exampleId, dataset: exampleDataset, speed: +$("#speed").value, formats: { base: $("#pf-base").value, finetuned: $("#pf-finetuned").value } }).then(({ run, error }) => {
+    if (error) { $("#hint").textContent = error; running = false; runButtons(); sides.forEach(endRecording); return; }
+    es = new EventSource("/api/events/" + run);
+    let finished = 0;
+    es.onmessage = (m) => {
+      const e = JSON.parse(m.data), s = e.side;
+      if (e.type === "status") { $(`#st-${s}`).textContent = e.text; $(`#ph-${s}`).textContent = e.text; }
+      else if (e.type === "token") { const p = $(`#code-${s}`); p.textContent += e.text; p.scrollTop = p.scrollHeight; }
+      else if (e.type === "code") { if (e.notes && e.notes.length) { $(`#code-${s}`).textContent = e.code; tag(s, "parser fixed: " + e.notes.join(", "), "warn"); } }
+      else if (e.type === "format" && e.manual) { tag(s, "manual code, no model"); $(`#pu-${s}`).textContent = "No model was used: this side ran the code in its box."; $(`#ps-${s}`).textContent = ""; }
+      else if (e.type === "format") { tag(s, `prompt: ${e.text}${e.auto ? " (auto)" : ""}`); showSent(s, e); }
+      else if (e.type === "generated") tag(s, `wrote code in ${e.seconds} s`);
+      else if (e.type === "flag") tag(s, `dataset checker would stop here (sim ${e.sim_s} s): ${e.msg}`, "warn");
+      else if (e.type === "frame") { record(s, e); showFrame(s, e, false); }
+      else if (e.type === "result") {
+        if (e.kind === "text") { const ms = $(`#ms-${s}`); ms.style.display = "block"; ms.textContent = e.answer; tag(s, "answered in text, no code", "warn"); if (e.success === true) tag(s, "correct (refusal as expected)", "ok"); else if (e.success === false) tag(s, "not correct", "bad"); $(`#ph-${s}`).textContent = "no code, so nothing to simulate"; }
+        else if (!e.executed) tag(s, "failed: " + (e.error || "not executed"), "bad");
+        else { if (e.success === true) tag(s, "task solved", "ok"); else if (e.success === false) tag(s, "task not solved", "bad"); else tag(s, "ran without error", "ok");
+          tag(s, `${e.calls} robot calls`); tag(s, `${e.sim_seconds} s simulated`);
+          if (e.strict_flags && e.strict_flags.length) tag(s, "strict dataset checker: would FAIL (collision)", "bad"); else if (e.strict_flags) tag(s, "strict dataset checker: no collision", "ok");
+          if (e.reasons && e.reasons.length) $(`#er-${s}`).textContent = "checker: " + e.reasons.join(" · "); }
+      }
+      else if (e.type === "done") { $(`#st-${s}`).textContent = "done"; endRecording(s); if (++finished === sides.length) { es.close(); running = false; runButtons(); } }
+    };
+    es.onerror = () => { es.close(); sides.forEach(endRecording); running = false; runButtons(); };     // connection lost: what arrived so far can be replayed
+  });
+}
+init();
+</script>
+</body>
+</html>

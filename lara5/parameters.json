@@ -1,0 +1,86 @@
+{
+  "model": "NEURA LARA 5",
+  "source": "https://cdn.robodk.com/downloads-library/library-robots/Neura-LARA-5.robot",
+  "sha256": "4dc8df5ff0e8396c86a2388f9f0a582ba3d8c34c9a310fb8f98d290a25dee3c3",
+  "dh_columns": [
+    "alpha_rad",
+    "a_mm",
+    "theta_offset_rad",
+    "d_mm"
+  ],
+  "modified_dh": [
+    [
+      0.0,
+      0.0,
+      0.0,
+      220.0
+    ],
+    [
+      -1.5707963267948966,
+      0.0,
+      -1.5707963267948966,
+      0.0
+    ],
+    [
+      0.0,
+      380.0,
+      -1.5707963267948966,
+      0.0
+    ],
+    [
+      -1.5707963267948966,
+      0.0,
+      0.0,
+      420.0
+    ],
+    [
+      1.5707963267948966,
+      0.0,
+      0.0,
+      0.0
+    ],
+    [
+      -1.5707963267948966,
+      0.0,
+      3.141592653589793,
+      165.0
+    ]
+  ],
+  "limits_deg": [
+    [
+      -180.0,
+      180.0
+    ],
+    [
+      -135.0,
+      135.0
+    ],
+    [
+      -155.0,
+      155.0
+    ],
+    [
+      -180.0,
+      180.0
+    ],
+    [
+      -180.0,
+      180.0
+    ],
+    [
+      -360.0,
+      360.0
+    ]
+  ],
+  "assumed_masses_kg": [
+    3.5,
+    4,
+    6,
+    3.5,
+    3,
+    2,
+    1
+  ],
+  "manufacturer_validated": false,
+  "notes": "Geometries and kinematic parameters decoded from the pinned RoboDK model. Masses, inertias, collision proxies and control gains are assumptions. Import is not independently checked against a real controller."
+}
