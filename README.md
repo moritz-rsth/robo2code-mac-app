@@ -37,11 +37,12 @@ These are real programs written by the models, run in the simulator. They are ha
 
 - **Models:** each side has a picker with base models, full models and adapters. Selecting one downloads it if needed and frees the side's old model.
 - **Manual code:** the last picker entry runs a pasted `def run(robot):` program, no model needed.
-- **Scene:** make a random scene with any number of cubes, or load a test example. Drag the 3D layout to look around.
+- **Scene:** make a random scene with up to 48 cubes, or load a test example. Drag the 3D layout to look around.
 - **Run:** run the left side, the right side or both, then **Replay** the recording at any speed.
 - **Chain prompt:** under each simulation. The end state of that side becomes the new scene and the request box is cleared, so the next request continues from there. A cube still in the gripper is let go.
 - **Result:** a run always plays to the end. The panel shows whether the task was solved and what the stricter dataset checker would have flagged.
-- **Prompt format:** *Auto* picks what the model was trained with, or choose *Objects line* or *Scene_Info JSON* yourself.
+- **Prompt format:** *Auto* picks what the model was trained with, or choose *Objects line*, *Scene_Info JSON* or *Scene_Info + answers* yourself.
+- **Scene questions:** models with `"answers": true` in `p2r_meta.json` reply to a question about the scene in one sentence. The arm does not move, and dataset rows show correct or wrong. `"max_cubes"` there sets when the page warns about scene size.
 
 **ID** finds any example by id, in any dataset version and split:
 

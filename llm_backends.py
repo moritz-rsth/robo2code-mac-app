@@ -16,6 +16,8 @@ import urllib.request
 from concurrent.futures import Future
 from pathlib import Path
 
+MAX_NEW_TOKENS = 2048          # data_posv1 allows answers of 3000 characters, about 1100 tokens of code and more with many numbers; 900 would cut them off
+
 
 class MLXThread:
     """The one thread that does all MLX work: import, load, generate, close, clearing the cache.
@@ -155,16 +157,20 @@ def strip_think(pieces):
 
 
 class MockBackend:
-    """No model: writes a plausible program for the first two cubes, token by token (for testing the app)."""
-    def __init__(self, label="mock", broken=False, drop_def=False, **_):
-        self.label, self.broken, self.drop_def = label, broken, drop_def
+    """No model: writes a plausible program for the first two cubes, token by token (for testing the app).
+    With answers=True it replies to a request ending in "?" with a sentence, as a model trained on scene questions would."""
+    def __init__(self, label="mock", broken=False, drop_def=False, answers=False, **_):
+        self.label, self.broken, self.drop_def, self.answers = label, broken, drop_def, answers
 
-    def stream(self, messages, max_new_tokens=900):
+    def stream(self, messages, max_new_tokens=MAX_NEW_TOKENS):
         user = messages[-1]["content"]
+        request, _, info = user.partition("\n\nScene_Info:\n")
         if "poem" in user.lower() or "weather" in user.lower():
             text = "I can only write robot programs. I see the cubes listed on the table. Please ask me to move or stack them."
+        elif self.answers and request.rstrip().endswith("?"):
+            text = "Yes, that is what I see on the table."
         else:
-            ids = [l.split(" (")[0].strip() for l in user.split("\n")[0].replace("Objects:", "").split(",")]
+            ids = list(json.loads(info)["scene"]["objects"]) if info else [l.split(" (")[0].strip() for l in user.split("\n")[0].replace("Objects:", "").split(",")]
             a, b = ids[0], ids[1 % len(ids)]
             z = "0.20" if self.broken else "0.06"
             text = (f"def run(robot):\n    a = robot.get_object_position('{a}')\n    b = robot.get_object_position('{b}')\n"
@@ -209,7 +215,7 @@ class MLXBackend:
 
         MLX.run(load_model)
 
-    def stream(self, messages, max_new_tokens=900):
+    def stream(self, messages, max_new_tokens=MAX_NEW_TOKENS):
         def pieces():
             from mlx_lm import stream_generate
             prompt = self.tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, enable_thinking=self.thinking)
@@ -272,7 +278,7 @@ class TransformersBackend:
         self.dev = dev
         print(f"transformers: {path} on {dev}, {next(self.model.parameters()).dtype}", flush=True)
 
-    def stream(self, messages, max_new_tokens=900):
+    def stream(self, messages, max_new_tokens=MAX_NEW_TOKENS):
         import torch
         from transformers import TextIteratorStreamer
         text = self.tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, enable_thinking=self.thinking)
@@ -308,7 +314,7 @@ class HTTPBackend:
     def __init__(self, url="http://localhost:11434/v1", model="qwen3:8b", label="http", **_):
         self.url, self.model, self.label = url.rstrip("/"), model, label
 
-    def stream(self, messages, max_new_tokens=900):
+    def stream(self, messages, max_new_tokens=MAX_NEW_TOKENS):
         req = urllib.request.Request(self.url + "/chat/completions", headers={"Content-Type": "application/json"}, data=json.dumps(
             dict(model=self.model, messages=messages, stream=True, max_tokens=max_new_tokens, temperature=0)).encode())
 

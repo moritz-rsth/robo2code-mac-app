@@ -5,7 +5,8 @@ and every folder in the env var P2R_MODEL_DIRS (colon separated). Recognized fol
   * MLX LoRA adapter   adapter_config.json + adapters.safetensors     (output of the Mac training script)
   * PEFT LoRA adapter  adapter_config.json + adapter_model.safetensors (output of the H100 training script, needs the transformers backend)
   * full model         config.json + *.safetensors                     (merged / converted MLX or HF model)
-An optional p2r_meta.json next to the files may set {"name": "...", "enable_thinking": true|false, "scene_info": true|false, "base": "<MLX base of an adapter>"}.
+An optional p2r_meta.json next to the files may set {"name": "...", "enable_thinking": true|false, "scene_info": true|false, "answers": true|false, "max_cubes": <largest training scene>, "base": "<MLX base of an adapter>"}.
+"answers": true means the model also answers scene questions in one sentence (prompt format "answers", Scene_Info included); max_cubes defaults to 6.
 
 With a Hugging Face token the Prompt2Robo repos of the account HF_USER are listed as well (refresh_account); nothing about them is hard-coded,
 so new uploads appear by themselves. Repo kinds by name: *-MLX-4bit and *-full go straight to MLX (kind "hf"); *-MLX-adapter is kind "hf_adapter" (small, runs
@@ -187,7 +188,7 @@ def complete(snapshot):
 
 def is_cached(repo):
     """Are the weights of this repo completely on this Mac? Looks at a few files in the Hugging Face cache or a local folder: no network, never raises.
-    A cache entry alone says nothing: the small json files of a repo get there without its weights (repo_adapter_base, wants_scene), and a download can stop halfway.
+    A cache entry alone says nothing: the small json files of a repo get there without its weights (repo_adapter_base, read_meta), and a download can stop halfway.
     Every snapshot counts, not just the newest: a small upstream commit moves refs/main, and the weights already here stay valid."""
     try:
         if Path(str(repo)).expanduser().is_dir():
@@ -292,18 +293,29 @@ def pairing_hint(info, err):
     return f"This adapter does not fit its base {base_info(base)['name']}: the layer sizes differ. The adapter files may name the wrong base."
 
 
-def wants_scene(info, token=None):
-    """True if the model was trained with the Scene_Info prompt format (p2r_meta.json "scene_info": true). Unknown or unreadable: False.
-    For an adapter info["path"] is the adapter folder, so its own file counts, not the base's."""
+def read_meta(info, token=None):
+    """The model's p2r_meta.json. Missing or unreadable: {}. For an adapter info["path"] is the adapter folder, so its own file counts, not the base's."""
     try:
         if info["kind"] == "hf":
             from huggingface_hub import hf_hub_download
             meta = Path(hf_hub_download(info["path"], "p2r_meta.json", token=token or None))
         else:
             meta = Path(info["path"]) / "p2r_meta.json"
-        return bool(json.loads(meta.read_text()).get("scene_info"))
+        data = json.loads(meta.read_text())
+        return data if isinstance(data, dict) else {}
     except Exception:
-        return False
+        return {}
+
+
+def prompt_format(meta):
+    """What the model was trained with: "answers", "scene" or "objects", a key of server.PROMPTS."""
+    return "answers" if meta.get("answers") else "scene" if meta.get("scene_info") else "objects"
+
+
+def max_cubes(meta, default):
+    """The largest scene the model has seen, for the warning next to the cube field. Anything but a whole number from 1 up: default."""
+    n = meta.get("max_cubes")
+    return n if type(n) is int and n >= 1 else default
 
 
 def backend_cfg(info, thinking=None):

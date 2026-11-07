@@ -75,6 +75,7 @@ details.settings { margin-bottom: 14px; } details.settings summary { cursor: poi
 details.settings .row input { font: inherit; font-size: 13px; border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; min-width: 320px; background: var(--bg); }
 .hintline { color: var(--muted); font-size: 12.5px; margin-top: 6px; }
 .msg { margin-top: 10px; padding: 10px 14px; border-radius: 12px; background: var(--warn-bg); border: 1px solid #f0dcae; display: none; }
+.msg.answer { background: var(--link-bg); border-color: #c9dbf8; }
 .errs { font-family: var(--mono); font-size: 11.5px; color: var(--muted); margin-top: 6px; }
 @media (max-width: 900px) { .controls, .duel { grid-template-columns: minmax(0, 1fr); } }
 </style>
@@ -101,7 +102,7 @@ details.settings .row input { font: inherit; font-size: 13px; border: 1px solid 
       <textarea id="instr" rows="3" placeholder="Put the red cube on top of the blue cube."></textarea>
       <div class="row">
         <span class="lab" style="margin:0">Scene</span>
-        <input id="ncubes" type="number" min="1" step="1" value="3" aria-label="Number of cubes" title="Number of cubes, at least 1. Training scenes had at most 6.">
+        <input id="ncubes" type="number" min="1" step="1" value="3" aria-label="Number of cubes" title="Number of cubes, at least 1. The note below says when a model has not seen scenes this big.">
         <button id="newscene">New random scene</button>
         <button id="loadex">Load a test example</button>
         <button id="loadid" title="find an example of any dataset version by its id">ID</button>
@@ -132,7 +133,7 @@ let scene = null, exampleId = null, exampleDataset = null, es = null;
 
 function sideHTML(id, label) {
   return `<h2><span id="l-${id}">${label}</span><span class="st" id="st-${id}">idle</span></h2>
-    <div class="picker"><select class="model" id="sel-${id}"></select><button id="rs-${id}" title="rescan folders and the Hugging Face account">↻</button><select id="pf-${id}" title="what the model gets besides the request. Auto = the format this model was trained with"><option value="auto">prompt: auto</option><option value="objects">prompt: Objects line</option><option value="scene">prompt: Scene_Info JSON</option></select></div>
+    <div class="picker"><select class="model" id="sel-${id}"></select><button id="rs-${id}" title="rescan folders and the Hugging Face account">↻</button><select id="pf-${id}" title="what the model gets besides the request. Auto = the format this model was trained with"><option value="auto">prompt: auto</option><option value="objects">prompt: Objects line</option><option value="scene">prompt: Scene_Info JSON</option><option value="answers">prompt: Scene_Info + answers</option></select></div>
     <div class="picker basebar" id="bb-${id}" hidden><span id="bt-${id}"></span><select id="ba-${id}" title="the MLX base this adapter runs on. The adapter's own base is the one it was made for" hidden></select></div>
     <div class="picker" id="cu-${id}" hidden><input id="in-${id}" placeholder="folder path or Hugging Face link"><select id="tp-${id}" title="chat template"><option value="auto">template: auto</option><option value="nothinking">non-thinking</option><option value="thinking">thinking</option></select><button id="ld-${id}">Load</button></div>
     <div class="picker" id="mw-${id}" hidden><textarea id="mc-${id}" rows="9" spellcheck="false" aria-label="Manual code" placeholder="def run(robot):\n    p = robot.get_object_position('1')\n    ..."></textarea></div>
@@ -271,9 +272,13 @@ function cubeCount() {
   $("#ncubes").value = goodCubes; cubeNote();
   return goodCubes;
 }
+// Each model has its own limit (max_cubes in p2r_meta.json). A side without a model has none, so the note speaks only of the sides it is true for.
 function cubeNote() {
-  const n = +$("#ncubes").value;
-  $("#cubenote").textContent = n > colorCount ? `training scenes had at most ${trainedCubes}; colours repeat, use the ids` : n > trainedCubes ? `training scenes had at most ${trainedCubes}` : "";
+  const n = +$("#ncubes").value, sideName = { base: "left", finetuned: "right" };
+  const over = SIDES.filter((s) => status[s]?.state === "ready" && !status[s].manual && n > (status[s].max_cubes || trainedCubes)), limit = (s) => status[s].max_cubes || trainedCubes;
+  const same = over.length === 2 && limit(over[0]) === limit(over[1]);
+  const trained = !over.length ? "" : same ? `training scenes had at most ${limit(over[0])}` : `training scenes had at most ${over.map((s) => `${limit(s)} (${sideName[s]})`).join(", ")}`;
+  $("#cubenote").textContent = [trained, n > colorCount ? "colours repeat, use the ids" : ""].filter(Boolean).join("; ");
 }
 async function newScene() {
   const n = sceneCubes = cubeCount(), asked = ++sceneAsked;
@@ -318,7 +323,7 @@ async function pickExample(e) {
   if (!manual.length) return;
   const a = await (await fetch("/api/answer/" + encodeURIComponent(e.id) + (e.dataset ? "?dataset=" + e.dataset : ""))).json();
   if (a.program) for (const s of manual) $(`#mc-${s}`).value = a.answer;
-  else $("#hint").textContent += " · this sample's answer is a refusal, so the code box stays as it was";
+  else $("#hint").textContent += ` · this sample's answer is ${a.expected === "answer" ? "a sentence" : "a refusal"}, so the code box stays as it was`;
 }
 function setupIdSearch() {
   const dlg = $("#iddlg"), q = $("#idq"), list = $("#idlist"), ds = $("#idds"), sp = $("#idsplit"), SHOW = 60, loaded = {};
@@ -444,7 +449,7 @@ function pollStatus() {
       ready[side] = s.state === "ready";
       if (s.state !== "ready") allReady = false;
     }
-    runButtons();
+    runButtons(); cubeNote();
     for (const side of SIDES) showBase(side);
     if (busy) sawLoading = true;
     else {
@@ -465,7 +470,7 @@ function showSent(side, e) {
   $(`#ps-${side}`).textContent = e.system;
 }
 function reset(side) {
-  $(`#code-${side}`).textContent = ""; $(`#ch-${side}`).innerHTML = ""; $(`#er-${side}`).textContent = ""; $(`#ms-${side}`).style.display = "none";
+  $(`#code-${side}`).textContent = ""; $(`#ch-${side}`).innerHTML = ""; $(`#er-${side}`).textContent = ""; $(`#ms-${side}`).style.display = "none"; $(`#ms-${side}`).classList.remove("answer");
   $(`#img-${side}`).style.display = "none"; $(`#ph-${side}`).style.display = "grid"; $(`#ph-${side}`).textContent = "waiting for the model"; $(`#tm-${side}`).hidden = true;
 }
 // ---- replay: every side records its frames during a run. MAX_FRAMES bounds the memory (about 50 MB per side): when it is reached, every second
@@ -563,12 +568,16 @@ function run(sides = SIDES) {
       else if (e.type === "code") { if (e.notes && e.notes.length) { $(`#code-${s}`).textContent = e.code; tag(s, "parser fixed: " + e.notes.join(", "), "warn"); } }
       else if (e.type === "format" && e.manual) { tag(s, "manual code, no model"); $(`#pu-${s}`).textContent = "No model was used: this side ran the code in its box."; $(`#ps-${s}`).textContent = ""; }
       else if (e.type === "format") { tag(s, `prompt: ${e.text}${e.auto ? " (auto)" : ""}`); showSent(s, e); }
-      else if (e.type === "generated") tag(s, `wrote code in ${e.seconds} s`);
+      else if (e.type === "generated") tag(s, `wrote ${e.answered ? "an answer" : "code"} in ${e.seconds} s`);
       else if (e.type === "flag") tag(s, `dataset checker would stop here (sim ${e.sim_s} s): ${e.msg}`, "warn");
       else if (e.type === "frame") { record(s, e); showFrame(s, e, false); }
       else if (e.type === "result") {
         chain[s] = { scene: e.next_scene, dropped: e.dropped || [], error: e.chain_error || "nothing was simulated, so there is no end state" };
-        if (e.kind === "text") { const ms = $(`#ms-${s}`); ms.style.display = "block"; ms.textContent = e.answer; tag(s, "answered in text, no code", "warn"); if (e.success === true) tag(s, "correct (refusal as expected)", "ok"); else if (e.success === false) tag(s, "not correct", "bad"); $(`#ph-${s}`).textContent = "no code, so nothing to simulate"; }
+        if (e.answered) { const ms = $(`#ms-${s}`); ms.classList.add("answer"); ms.style.display = "block"; ms.textContent = e.answer; $(`#code-${s}`).textContent = ""; tag(s, "answered");
+          if (e.success === true) tag(s, "correct", "ok"); else if (e.success === false) tag(s, "wrong", "bad");
+          if (e.reasons && e.reasons.length) $(`#er-${s}`).textContent = "checker: " + e.reasons.join(" · ");
+          $(`#ph-${s}`).textContent = "answered, the arm does not move"; }
+        else if (e.kind === "text") { const ms = $(`#ms-${s}`); ms.style.display = "block"; ms.textContent = e.answer; tag(s, "answered in text, no code", "warn"); if (e.success === true) tag(s, "correct (refusal as expected)", "ok"); else if (e.success === false) tag(s, "not correct", "bad"); $(`#ph-${s}`).textContent = "no code, so nothing to simulate"; }
         else if (!e.executed) tag(s, "failed: " + (e.error || "not executed"), "bad");
         else { if (e.success === true) tag(s, "task solved", "ok"); else if (e.success === false) tag(s, "task not solved", "bad"); else tag(s, "ran without error", "ok");
           tag(s, `${e.calls} robot calls`); tag(s, `${e.sim_seconds} s simulated`);

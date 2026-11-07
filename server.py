@@ -25,14 +25,19 @@ import models_scan  # noqa: E402
 SYSTEM = (HERE / "system_prompt.md").read_text().strip()
 _OBJECTS_LINE = "The user message lists the objects on the table (id and color), followed by the request. Only use these ids."
 SYSTEM_SCENE = SYSTEM.replace(_OBJECTS_LINE, "The user message gives the request, followed by Scene_Info: JSON with the objects on the table (id, color, start position) and the gripper. Only use these ids.")
+# ---- THE ONE PLACE TO SWAP: the extra line of the "answers" format. PROPOSAL, written from the spec. Replace it with the exact new line of data_posv1/system_prompt.md
+# once that file is final, and move it if the final file does not have it at the very end. Nothing else in the app depends on its wording.
+ANSWER_LINE = "If the request is a question about the scene, do not write code and do not move the arm: reply with one short plain sentence that answers it from Scene_Info."
+SYSTEM_ANSWERS = SYSTEM_SCENE + "\n\n" + ANSWER_LINE
+PROMPTS = {"objects": ("Objects line", SYSTEM), "scene": ("Scene_Info JSON", SYSTEM_SCENE), "answers": ("Scene_Info + answers", SYSTEM_ANSWERS)}    # format -> name on the page, system prompt
 EXAMPLES = [json.loads(l) for l in (HERE / "examples.jsonl").read_text().splitlines() if l.strip()] if (HERE / "examples.jsonl").exists() else []
 BY_ID = {e["id"]: e for e in EXAMPLES}
-DATASETS = [n for n in ("data_posv0", "data_v5", "data_v4", "data_v3", "data_v2", "data_v1", "data_v0") if (HERE / "datasets" / f"{n}.jsonl.gz").exists()]    # newest first
+DATASETS = [n for n in ("data_posv1", "data_posv0", "data_v5", "data_v4", "data_v3", "data_v2", "data_v1", "data_v0") if (HERE / "datasets" / f"{n}.jsonl.gz").exists()]    # newest first
 DATASET_ROWS = {}                                        # name -> {id: row}, read when the ID overlay first asks for it
 RUNS, GEN_LOCK, LOAD_LOCK = {}, threading.Lock(), threading.Lock()
 BACKENDS = {"base": None, "finetuned": None}             # the only owners of the models: a model lives exactly as long as a side holds it
 MODEL_KEY = {"base": None, "finetuned": None}            # what each side holds (see model_key); equal keys = one shared model
-SCENE_MODEL = {"base": False, "finetuned": False}        # does the loaded model expect Scene_Info? (p2r_meta.json "scene_info")
+MODEL_FORMAT = {"base": "objects", "finetuned": "objects"}   # the prompt format the loaded model was trained with, a key of PROMPTS (see models_scan.prompt_format)
 STATUS = {s: dict(state="empty", label="", error=None) for s in BACKENDS}
 STATE = threading.Condition()                            # guards GENERATING, LOAD_SEQ and the step "all ready? then start a run" against a load
 GENERATING = set()                                       # (run, side) from the start of a run until that side's model has finished writing
@@ -44,8 +49,9 @@ HF_TOKEN = {"value": os.environ.get("HF_TOKEN") or DEFAULT_TOKEN}
 if HF_TOKEN["value"]:
     os.environ["HF_TOKEN"] = HF_TOKEN["value"]
 COLORS = ["red", "blue", "green", "yellow", "orange", "white", "purple", "cyan", "pink", "black", "brown", "gray"]     # the 12 colours of the dataset
-TRAINED_CUBES = 6                                        # dataset scenes have at most 6 cubes
+TRAINED_CUBES = 6                                        # scenes of the datasets up to data_posv0 stay around 6 cubes; a model with "max_cubes" in p2r_meta.json says its own number
 GRID = [(x, y) for x in (0.30, 0.407, 0.513, 0.62) for y in (-0.28, -0.168, -0.056, 0.056, 0.168, 0.28)]    # workspace of random_scene, every 10.6 cm or more
+BIG_GRID = [(round(0.20 + 0.104 * i, 3), round(-0.364 + 0.104 * j, 3)) for i in range(6) for j in range(8)]     # above 24 cubes: 48 cells, 10.4 cm apart, all reachable and graspable
 _check = None
 
 
@@ -53,6 +59,11 @@ def request_of(row):
     """The request alone: rows up to data_v4 start with an "Objects:" line, newer ones are only the request (which can have several lines)."""
     up = row["user_prompt"]
     return up.split("\n", 1)[1] if up.startswith("Objects:") and "\n" in up else up
+
+
+def expects_answer(sample, fmt):
+    """Is a plain-text reply here an answer to a scene question? The dataset row decides. Without a row only the format can tell, and a refusal looks the same."""
+    return sample.get("expected_behavior") == "answer" if sample else fmt == "answers"
 
 
 def dataset_rows(name):
@@ -81,6 +92,47 @@ def check_sample(sample, answer):
         _check = c.check
     ok, reasons = _check(dict(sample, assistant_answer=answer))
     return bool(ok), list(reasons)[:4]
+
+
+NUMBER_WORDS = "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty".split()
+NUMBERS = {w: str(i) for i, w in enumerate(NUMBER_WORDS)} | {f"twenty {w}": str(20 + i) for i, w in enumerate(NUMBER_WORDS[:10]) if i}
+
+
+def check_answer(sample, text):
+    """(True, False or None, reasons) for a reply to an expected_behavior "answer" row; None = the row gives no words to judge by.
+    Stopgap for destination {"mode": "answer", "accept": [...], "reject": [...]} as drafted in the spec: every accept word must appear, no reject word may. An accept entry
+    that is a list means any one of its words. Whole words, ignoring case, and "five" counts as "5". The stored words are all it knows: it cannot notice a stale row.
+    PLUG-IN POINT: when tools/check_posv1.py exists, copy it into sim/ as a new file and call its answer check here (it derives the true answer from the scene).
+    sim/check.py stays as it is, the rows with mode "answer" never reach it."""
+    def norm(value):
+        low = re.sub(r"[\s-]+", " ", str(value).lower())
+        return re.sub(r"\b(" + "|".join(sorted(NUMBERS, key=len, reverse=True)) + r")\b", lambda m: NUMBERS[m.group(1)], low)
+
+    def said(word):
+        return re.search(r"(?<!\w)" + re.escape(norm(word)) + r"(?!\w)", low) is not None
+
+    dest, low = sample.get("destination") or {}, norm(text)
+    accept, reject = ([dest[k]] if isinstance(dest.get(k), str) else list(dest.get(k) or []) for k in ("accept", "reject"))
+    if not accept and not reject:
+        return None, ["this row has no accept or reject words, so there is no verdict"]
+    reasons = [f"missing: {w}" for w in accept if not any(said(x) for x in (w if isinstance(w, list) else [w]))] + [f"must not say: {w}" for w in reject if said(w)]
+    return not reasons, reasons
+
+
+def text_result(sample, fmt, text):
+    """What a reply without a program counts as -> the fields of the result event. A side that had to write code stays a plain text reply, checked as before."""
+    if not expects_answer(sample, fmt):
+        kw = dict(answer=text.strip())
+        if sample:
+            kw["success"], kw["reasons"] = check_sample(sample, text.strip())
+        return kw
+    answer = re.sub(r"<think>.*?(</think>|$)", "", text, flags=re.S).replace("<|im_end|>", "").strip()
+    kw = dict(answer=answer, answered=True)
+    if sample:
+        ok, kw["reasons"] = check_answer(sample, answer)
+        if ok is not None:
+            kw["success"] = ok
+    return kw
 
 
 def other_side(side):
@@ -124,7 +176,7 @@ def generation_over(run, side):
 def unload_side(side):
     """Drop this side's model. It is freed unless the other side shares it. Caller holds LOAD_LOCK and GEN_LOCK, no generation is running."""
     backend = BACKENDS[side]
-    BACKENDS[side], MODEL_KEY[side], SCENE_MODEL[side] = None, None, False
+    BACKENDS[side], MODEL_KEY[side], MODEL_FORMAT[side] = None, None, "objects"
     if backend is None:
         return
     label = getattr(backend, "label", "model")
@@ -186,11 +238,12 @@ def load_side(side, info, thinking=None, seq=None):
                     print(f"loading {side}: {label} ...", flush=True)
                     BACKENDS[side] = llm_backends.make(cfg)
                 MODEL_KEY[side] = key
-            SCENE_MODEL[side] = models_scan.wants_scene(info, HF_TOKEN["value"])
+            meta = models_scan.read_meta(info, HF_TOKEN["value"])
+            MODEL_FORMAT[side] = models_scan.prompt_format(meta)
             base = models_scan.base_info(info["base"]) if info.get("base") else None
             with STATE:
                 if seq is None or seq == LOAD_SEQ[side]:           # meanwhile the side may have gone to Manual code, which then drops this model
-                    STATUS[side] = dict(state="ready", label=label, error=None, base_info=base)
+                    STATUS[side] = dict(state="ready", label=label, error=None, base_info=base, max_cubes=models_scan.max_cubes(meta, TRAINED_CUBES))
             print(f"{side} ready", flush=True)
         except Exception as e:
             error = load_error(side, info, e)
@@ -251,7 +304,8 @@ def load_request(req):
 
 
 def user_prompt(scene, instruction, scene_info=False):
-    """The two prompt formats. Scene_Info is byte for byte what the models trained with it have seen; the others know only the Objects line."""
+    """The two user messages. Scene_Info is byte for byte what the models trained with it have seen; the others know only the Objects line.
+    The "answers" format uses the Scene_Info message too, only its system prompt differs (see PROMPTS)."""
     if scene_info:
         return instruction + "\n\nScene_Info:\n" + json.dumps({"scene": scene})
     objs = ", ".join(f"{i} ({o['color']})" for i, o in scene["objects"].items())
@@ -294,12 +348,13 @@ def cube_count(value, default=3):
 
 
 def random_scene(n, seed):
-    """Up to n cubes at least 10 cm apart. More than fit: as many as fit (len(GRID)), the page tells the user. Always ends after a bounded number of tries.
+    """Up to n cubes at least 10 cm apart. More than fit: as many as fit (len(BIG_GRID)), the page tells the user. Always ends after a bounded number of tries.
     Colours repeat above 12 cubes, the ids stay unique."""
-    n = min(n, len(GRID))
+    cells = GRID if n <= len(GRID) else BIG_GRID         # up to 24 cubes the scenes stay in the area they always had
+    n = min(n, len(cells))
     rng = random.Random(seed)
     ids = sorted(rng.sample(range(1, max(n, 9) + 1), n))
-    cols = (COLORS * 2)[:n]
+    cols = (COLORS * (n // len(COLORS) + 1))[:n]
     rng.shuffle(cols)
     pos = []
     for _ in range(2000):
@@ -309,7 +364,7 @@ def random_scene(n, seed):
         if all((p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2 > 0.10 ** 2 for q in pos):
             pos.append(p)
     if len(pos) < n:                                     # random placing got stuck (happens from about 14 cubes): a random part of the grid always fits
-        pos = rng.sample(GRID, n)
+        pos = rng.sample(cells, n)
     return dict(objects={str(i): dict(color=c, position=[x, y, 0.02]) for i, c, (x, y) in zip(ids, cols, pos)},
                 gripper=dict(position=[0.4, 0.0, 0.3], angle_deg=0, is_open=True))
 
@@ -329,6 +384,8 @@ class Run:
 def work(run, side, req):
     try:
         sample = find_example(req.get("example_id"), req.get("dataset"))
+        answer_row = expects_answer(sample, None)                           # a question of the dataset: sim/check.py has no rule for it, see check_answer
+        fmt = None
         text = (req.get("manual") or {}).get(side)                          # Manual code: the pasted text takes the place of the model's answer
         if text is not None:
             generation_over(run, side)
@@ -339,14 +396,15 @@ def work(run, side, req):
         else:
             run.emit(side, "status", text="waiting for the model")
             mode = (req.get("formats") or {}).get(side, "auto")             # auto = what the model was trained with
-            scene_info = SCENE_MODEL[side] if mode == "auto" else mode == "scene"
-            msgs = [{"role": "system", "content": SYSTEM_SCENE if scene_info else SYSTEM},
-                    {"role": "user", "content": user_prompt(req["scene"], req["instruction"], scene_info)}]
-            run.emit(side, "format", text="Scene_Info JSON" if scene_info else "Objects line", auto=mode == "auto",
+            fmt = MODEL_FORMAT[side] if mode == "auto" else mode if mode in PROMPTS else "objects"
+            name, system = PROMPTS[fmt]
+            msgs = [{"role": "system", "content": system},
+                    {"role": "user", "content": user_prompt(req["scene"], req["instruction"], fmt != "objects")}]
+            run.emit(side, "format", text=name, auto=mode == "auto",
                      system=msgs[0]["content"], user=msgs[1]["content"], request=req["instruction"])      # shown as sent, so the prompt is no black box
             text, t0, n = "", None, 0
             with GEN_LOCK:                               # one model generates at a time (memory); the simulators run in parallel
-                run.emit(side, "status", text="writing code")
+                run.emit(side, "status", text="writing the reply" if fmt == "answers" else "writing code")
                 if BACKENDS[side] is None:
                     raise RuntimeError("no model loaded on this side")
                 for piece in BACKENDS[side].stream(msgs):
@@ -354,21 +412,23 @@ def work(run, side, req):
                     text, n = text + piece, n + 1
                     run.emit(side, "token", text=piece)
             generation_over(run, side)
-            run.emit(side, "generated", seconds=round(time.time() - (t0 or time.time()), 1), pieces=n)
+            run.emit(side, "generated", seconds=round(time.time() - (t0 or time.time()), 1), pieces=n, answered=not extract_code(text)[0] and expects_answer(sample, fmt))
         code, notes = extract_code(text)
         if not code:
-            kw = {}
-            if sample:
-                kw["success"], kw["reasons"] = check_sample(sample, text.strip())
-            run.emit(side, "result", kind="text", executed=False, answer=text.strip(), **kw)
+            kw = text_result(sample, fmt, text)
+            if kw.get("answered"):                       # the arm did not move: the scene is the end state, so Chain prompt goes on from it
+                kw.update(next_scene=req["scene"], dropped=[])
+            run.emit(side, "result", kind="text", executed=False, **kw)
             return
         run.emit(side, "code", code=code, notes=notes)
         job = Path(tempfile.mkdtemp()) / "job.json"
-        job.write_text(json.dumps(dict(scene=req["scene"], code=code, sample=sample, speed=req.get("speed", 4.0))))
+        job.write_text(json.dumps(dict(scene=req["scene"], code=code, sample=None if answer_row else sample, speed=req.get("speed", 4.0))))
         run.emit(side, "status", text="running in the simulator")
         p = subprocess.Popen([sys.executable, str(HERE / "sim_worker.py"), str(job)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         for line in p.stdout:
             e = json.loads(line)
+            if answer_row and e["t"] == "result" and e["executed"]:
+                e.update(success=False, reasons=["this question needs one short sentence, not a program: the arm must not move"])
             run.emit(side, e.pop("t"), kind="code", **e)
         p.wait()
     except Exception as e:
@@ -401,14 +461,14 @@ class Handler(BaseHTTPRequestHandler):
             name = self.path.rsplit("/", 1)[1]
             if name not in DATASETS:
                 return self._json({"error": "unknown dataset"}, 404)
-            self._json(dict(rows=[dict(id=e["id"], subcategory=e["subcategory"], split=e.get("split", ""), scene=e["scene"], dataset=name,
+            self._json(dict(rows=[dict(id=e["id"], subcategory=e.get("subcategory", ""), split=e.get("split", ""), scene=e["scene"], dataset=name,
                                        instruction=e.get("request") or request_of(e)) for e in dataset_rows(name).values()]))
         elif self.path.startswith("/api/answer/"):           # the reference answer of one example; /api/config stays light without them
             path, _, dataset = self.path.partition("?dataset=")
             e = find_example(path.rsplit("/", 1)[1], dataset)
             if not e:
                 return self._json({"error": "unknown example"}, 404)
-            self._json(dict(id=e["id"], answer=e["assistant_answer"], program=bool(extract_code(e["assistant_answer"])[0])))
+            self._json(dict(id=e["id"], answer=e["assistant_answer"], program=bool(extract_code(e["assistant_answer"])[0]), expected=e.get("expected_behavior")))
         elif self.path == "/api/status":
             self._json(STATUS)
         elif self.path.split("?")[0] == "/api/models":
@@ -472,10 +532,10 @@ class Handler(BaseHTTPRequestHandler):
 
 def autoload(mock):
     if mock:
-        for side, cfg in (("base", {"backend": "mock", "label": "mock base (broken placement, forgets def)", "broken": True, "drop_def": True}),
-                          ("finetuned", {"backend": "mock", "label": "mock fine-tuned"})):
-            BACKENDS[side], MODEL_KEY[side] = llm_backends.make(cfg), model_key(cfg)
-            STATUS[side] = dict(state="ready", label=cfg["label"], error=None)
+        for side, cfg, fmt, cubes in (("base", {"backend": "mock", "label": "mock base (broken placement, forgets def)", "broken": True, "drop_def": True}, "objects", TRAINED_CUBES),
+                                      ("finetuned", {"backend": "mock", "label": "mock fine-tuned (answers questions)", "answers": True}, "answers", 27)):
+            BACKENDS[side], MODEL_KEY[side], MODEL_FORMAT[side] = llm_backends.make(cfg), model_key(cfg), fmt
+            STATUS[side] = dict(state="ready", label=cfg["label"], error=None, max_cubes=cubes)
         return
     ms = models_scan.list_models()
     local = sorted((m for m in ms if not m["kind"].startswith("hf")), key=lambda m: -m["mtime"])
