@@ -21,6 +21,7 @@ sys.path.insert(0, str(HERE / "sim"))
 import llm_backends  # noqa: E402
 import lara_assets  # noqa: E402
 import models_scan  # noqa: E402
+import scene_gen  # noqa: E402
 
 SYSTEM = (HERE / "system_prompt.md").read_text().strip()
 _OBJECTS_LINE = "The user message lists the objects on the table (id and color), followed by the request. Only use these ids."
@@ -456,7 +457,8 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/config":
             ex = [dict(id=e["id"], category=e["category"], subcategory=e["subcategory"], scene=e["scene"],
                        instruction=request_of(e)) for e in EXAMPLES]
-            self._json(dict(examples=ex, datasets=DATASETS, status=STATUS, trained_cubes=TRAINED_CUBES, colors=len(COLORS)))
+            self._json(dict(examples=ex, datasets=DATASETS, status=STATUS, trained_cubes=TRAINED_CUBES, colors=len(COLORS),
+                            color_names=COLORS, object_types=scene_gen.type_table()))
         elif self.path.startswith("/api/dataset/"):          # the rows of one dataset version for the ID overlay, without the answers
             name = self.path.rsplit("/", 1)[1]
             if name not in DATASETS:
@@ -503,7 +505,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         req = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
         if self.path == "/api/scene":
-            self._json(dict(scene=random_scene(cube_count(req.get("n_cubes")), req.get("seed"))))
+            if not req.get("objects"):                          # no structures configured: exactly the scenes of before
+                return self._json(dict(scene=random_scene(cube_count(req.get("n_cubes")), req.get("seed"))))
+            try:
+                self._json(scene_gen.generate(cube_count(req.get("n_cubes")), req.get("seed"), req["objects"], COLORS))
+            except scene_gen.SceneError as e:
+                self._json(dict(scene=None, error=str(e)))
         elif self.path == "/api/settings":
             tok = (req.get("hf_token") or "").strip().strip("\"'") or DEFAULT_TOKEN
             HF_TOKEN["value"] = tok or None

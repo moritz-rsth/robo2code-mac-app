@@ -38,6 +38,7 @@ These are real programs written by the models, run in the simulator. They are ha
 - **Models:** each side has a picker with base models, full models and adapters. Selecting one downloads it if needed and frees the side's old model.
 - **Manual code:** the last picker entry runs a pasted `def run(robot):` program, no model needed.
 - **Scene:** make a random scene with up to 48 cubes, or load a test example. Drag the 3D layout to look around.
+- **Scene generator:** the pencil next to **New random scene** adds towers (2 to 10 high), pyramids (2 to 5 layers), flat squares (2x2 to 4x4), lines and L, T and cross shapes, each at a random free spot, in one colour or mixed. The cube count cannot go below what they need, and any extra cubes are placed as single cubes.
 - **Run:** run the left side, the right side or both, then **Replay** the recording at any speed.
 - **Chain prompt:** under each simulation. The end state of that side becomes the new scene and the request box is cleared, so the next request continues from there. A cube still in the gripper is let go.
 - **Result:** a run always plays to the end. The panel shows whether the task was solved and what the stricter dataset checker would have flagged.
@@ -73,6 +74,7 @@ The best public model to start with is `Prompt2Robo v3-full-4b, Qwen3-4B · MLX 
 | Path | Purpose |
 |---|---|
 | `server.py`, `static/index.html` | Web server and page |
+| `scene_gen.py` | Scene generator for towers, pyramids, squares and shapes |
 | `models_scan.py`, `llm_backends.py` | Model discovery and MLX/Transformers backends |
 | `sim_worker.py`, `floor_view.py`, `lara_view.py`, `lara_assets.py` | Simulation runs and picture |
 | `sim/` | Scene, robot API and checker from the dataset repo |
