@@ -39,6 +39,7 @@ These are real programs written by the models, run in the simulator. They are ha
 - **Manual code:** the last picker entry runs a pasted `def run(robot):` program, no model needed.
 - **Scene:** make a random scene with any number of cubes, or load a test example. Drag the 3D layout to look around.
 - **Run:** run the left side, the right side or both, then **Replay** the recording at any speed.
+- **Chain prompt:** under each simulation. The end state of that side becomes the new scene and the request box is cleared, so the next request continues from there. A cube still in the gripper is let go.
 - **Result:** a run always plays to the end. The panel shows whether the task was solved and what the stricter dataset checker would have flagged.
 - **Prompt format:** *Auto* picks what the model was trained with, or choose *Objects line* or *Scene_Info JSON* yourself.
 

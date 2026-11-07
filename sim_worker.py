@@ -112,6 +112,14 @@ def install_frame_hook(speed):
     return lambda: setattr(R.Sim, "_step", orig_step)
 
 
+def next_scene(final, sim):
+    """The start scene of a chained prompt: the end state, brought to rest. A scene cannot hold a cube in the gripper, so a held cube is let go and falls."""
+    held = sorted(sim.held_objects())
+    rest = R.Sim(dict(final, gripper=dict(final["gripper"], is_open=final["gripper"]["is_open"] or bool(held))))
+    rest._settle(max_steps=3000, min_steps=200)
+    return rest.state(), held
+
+
 def main():
     job = json.loads(Path(sys.argv[1]).read_text())
     code, scene, sample = job["code"], job["scene"], job.get("sample")
@@ -128,6 +136,10 @@ def main():
             res["success"], res["reasons"] = bool(ok), list(reasons)[:4]
         except Exception as e:
             res["success"], res["reasons"] = False, [f"checker error: {e}"]
+    try:
+        res["next_scene"], res["dropped"] = next_scene(final, sim)
+    except Exception as e:
+        res["chain_error"] = str(e)
     emit(**res)
 
 

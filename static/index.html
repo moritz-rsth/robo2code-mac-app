@@ -139,7 +139,7 @@ function sideHTML(id, label) {
     <details class="sent" id="pd-${id}"><summary>Prompt sent to the model</summary><pre id="pu-${id}">nothing sent yet</pre>
       <details><summary>System prompt</summary><pre id="ps-${id}"></pre></details></details>
     <div class="screen"><img id="img-${id}" alt=""><div class="ph" id="ph-${id}">waiting for a run</div><span class="tm" id="tm-${id}" hidden></span></div>
-    <div class="under"><button id="rp-${id}" disabled title="no recorded frames yet">Replay</button><span class="cap">Floor grid: 1 cell = 10 cm, bold lines every 1 m</span></div>
+    <div class="under"><button id="rp-${id}" disabled title="no recorded frames yet">Replay</button><button id="chain-${id}" disabled title="run this side first">Chain prompt</button><span class="cap">Floor grid: 1 cell = 10 cm, bold lines every 1 m</span></div>
     <div class="chips" id="ch-${id}"></div><div class="errs" id="er-${id}"></div>
     <div class="msg" id="ms-${id}"></div>
     <pre id="code-${id}"></pre>`;
@@ -298,6 +298,7 @@ async function init() {
   setupIdSearch();
   $("#run").onclick = () => run(SIDES);
   for (const s of SIDES) $(`#run-${s}`).onclick = () => run([s]);
+  for (const s of SIDES) $(`#chain-${s}`).onclick = () => chainPrompt(s);
   for (const s of SIDES) $(`#rp-${s}`).onclick = () => (rec[s].play ? stopReplay([s]) : startReplay([s]));
   $("#rpboth").onclick = () => (SIDES.some((s) => rec[s].play) ? stopReplay() : startReplay(SIDES));
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") stopReplay(); });
@@ -521,10 +522,22 @@ function replayTick(now) {
 const tag = (side, text, cls = "") => { const t = document.createElement("span"); t.className = "tag " + cls; t.textContent = text; $(`#ch-${side}`).append(t); };
 
 // Run left / right / both: a button works when its models are ready and nothing is running.
-const ready = {}; let running = false;
+const ready = {}, chain = {}; let running = false;
 function runButtons() {
   for (const s of SIDES) $(`#run-${s}`).disabled = running || !ready[s];
   $("#run").disabled = running || !SIDES.every((s) => ready[s]);
+  for (const s of SIDES) {
+    const b = $(`#chain-${s}`), c = chain[s];
+    b.disabled = running || !c?.scene; b.title = c?.scene ? "continue from where this run ended: its end state becomes the scene and the request box is cleared" : c?.error || "run this side first";
+  }
+}
+// Chain prompt: the end state of one side becomes the scene of the next request. It is a free scene now, so nothing is checked against a dataset row.
+function chainPrompt(s) {
+  const { scene: next, dropped } = chain[s];
+  scene = next; exampleId = exampleDataset = null; sceneCubes = 0; drawMap();
+  $("#instr").value = ""; $("#instr").focus();
+  const from = s === "base" ? "left" : "right", held = dropped.length ? ` Cube ${dropped.join(", ")} was in the gripper and has been let go.` : "";
+  $("#hint").textContent = `Chained: this scene is where the ${from} side ended.${held} Type the next request.`;
 }
 // A manual side needs no request. With an empty request box only the manual sides run, a model side says why it did not.
 function run(sides = SIDES) {
@@ -536,7 +549,7 @@ function run(sides = SIDES) {
   for (const s of skipped) { $(`#st-${s}`).textContent = "needs a request"; $("#hint").textContent = "The request box is empty, so only the manual side ran."; }
   if (es) es.close();
   stopReplay();
-  for (const s of sides) { reset(s); rec[s] = newRec(); rec[s].live = true; }
+  for (const s of sides) { reset(s); rec[s] = newRec(); rec[s].live = true; chain[s] = null; }
   replayButtons();
   running = true; runButtons();
   post("/api/run", { instruction, scene, sides, manual, example_id: exampleId, dataset: exampleDataset, speed: +$("#speed").value, formats: { base: $("#pf-base").value, finetuned: $("#pf-finetuned").value } }).then(({ run, error }) => {
@@ -554,6 +567,7 @@ function run(sides = SIDES) {
       else if (e.type === "flag") tag(s, `dataset checker would stop here (sim ${e.sim_s} s): ${e.msg}`, "warn");
       else if (e.type === "frame") { record(s, e); showFrame(s, e, false); }
       else if (e.type === "result") {
+        chain[s] = { scene: e.next_scene, dropped: e.dropped || [], error: e.chain_error || "nothing was simulated, so there is no end state" };
         if (e.kind === "text") { const ms = $(`#ms-${s}`); ms.style.display = "block"; ms.textContent = e.answer; tag(s, "answered in text, no code", "warn"); if (e.success === true) tag(s, "correct (refusal as expected)", "ok"); else if (e.success === false) tag(s, "not correct", "bad"); $(`#ph-${s}`).textContent = "no code, so nothing to simulate"; }
         else if (!e.executed) tag(s, "failed: " + (e.error || "not executed"), "bad");
         else { if (e.success === true) tag(s, "task solved", "ok"); else if (e.success === false) tag(s, "task not solved", "bad"); else tag(s, "ran without error", "ok");
