@@ -1,57 +1,77 @@
 # Prompt2Robo model duel (Mac)
 
-One request, one scene, two models side by side. Both write a `run(robot)` program; each runs live in a MuJoCo simulation through
-our robot API (`sim/robot.py`, the same code that verified the dataset). Held-out test examples are scored automatically by `sim/check.py`.
+Type a request. Two language models each write a `run(robot)` program, and both programs run side by side in a live MuJoCo simulation. Held-out examples are scored automatically.
 
-## What you need
-- An **Apple-Silicon Mac** (M1 or newer), ideally 16 GB RAM or more
-- **Python 3.10 or newer** (macOS' built-in python3 is often 3.9; get the installer at https://www.python.org/downloads/macos/)
-- Internet on the first start (the base model, about 5 GB, is downloaded once), about 10 GB free disk
+![Untuned model against the fine-tuned model building a tower](docs/duel-tower.gif)
 
 ## Start
-1. Copy this folder anywhere (Desktop is fine). 2. Double-click **`run_mac.command`** (or run `sh run_mac.sh` in Terminal).
-3. The first start installs everything (a few minutes) and opens http://localhost:8766. Later starts take seconds.
-   `sh run_mac.sh --mock` tries the page with fake models and no download.
 
-## Choosing models
-Each side has a model picker. The app **finds models by itself** in `mac_app/models/`
-and the training output folder (e.g. the `output` folder of the Mac training script: its `adapters` folder is detected as a LoRA adapter).
-Left side defaults to the base model, right side to the newest model found. Use ↻ to rescan the folders and ask Hugging Face again after copying or uploading something.
-The picker has three groups: **Base models**, **Full models** (Prompt2Robo fine-tunes, MLX and `-full`) and **Adapters**. Each entry shows its size and whether it is here: `✓ on this Mac` or `↓ 4.6 GB` (still to download). That comes from the files in the Hugging Face cache, a half finished download counts as not here. Folders found on this Mac are sorted into the same groups.
-When an adapter is selected, a line under the picker names the base it needs and whether that base is here ("Base: Qwen3-8B 4-bit ✓ on this Mac" or "↓ 4.6 GB, downloads on first use"). Only the adapter and a missing base are downloaded.
-- **Token:** the public models work without one. In a shared copy, `hf_readonly_token.txt` holds a read-only Hugging Face token, so the private models appear without any setup. Treat such a copy like a password: only give it to people you trust, never publish it. The file is ignored by git and is not in the GitHub repo. Revoking the token on Hugging Face stops every copy; then replace the file.
-- **All Prompt2Robo models of the account `moritzzzz`** (private repos) appear in both pickers; a different token can be given: open **Settings**, paste a Hugging Face token that can read them, press Save.
-  Alternatively `export HF_TOKEN=hf_...` in the Terminal before `sh run_mac.sh`. Without a token only the public ones are listed. The list comes from Hugging Face, so a new upload shows up after ↻ with no code change.
-  If the token is wrong, has no access or Hugging Face cannot be reached, Settings says so. The right side defaults to the newest model found, so choose by hand.
-  Best so far: "Prompt2Robo v3-full-4b, Qwen3-4B · MLX 4-bit" (2.3 GB, 131/163 in the simulator). The app keeps models in the Hugging Face cache (`~/.cache/huggingface`).
-  - `*-MLX-4bit`: quantized for MLX, the fast choice.
-  - `*-full`: bf16 weights, loaded by MLX directly (about 8 GB for the 4B).
-  - `*-MLX-adapter`: LoRA adapter in MLX format (about 0.35 GB), runs through MLX on its base, normally `mlx-community/Qwen3-8B-4bit`. The base comes from `p2r_meta.json` in the repo (`"base"`), then `adapter_config.json`, then that default. The small dropdown next to the base line pairs the adapter with another MLX base: the 8-bit and bf16 Qwen3-8B fit, and are closer to the weights it was trained on, but need more memory. A base that does not fit (Qwen3-4B) gives a short message in the panel and the side stays empty. The Scene_Info setting of auto comes from the adapter's `p2r_meta.json`. An adapter on a base is its own model: it is loaded separately from the same base without the adapter, and shared only with the same adapter on the same base.
-  - `*-adapter`: PEFT LoRA/QLoRA adapter. It runs through the transformers backend on the bf16 base `Qwen/Qwen3-8B` (a 16 GB download, needs a lot of RAM, slow).
-    That backend is not installed by default: if the page asks for it, run `.venv/bin/pip install torch peft` in this folder. Prefer the MLX version of the same model.
-- **Base models**: Qwen3-4B 4-bit (the untuned base of the 4B fine-tunes) and Qwen3-8B in 4-bit, 8-bit and bf16 are always in the list, also without internet or token.
-- **Other…** lets you paste a **folder path** or a **Hugging Face link** (e.g. `https://huggingface.co/Carlo0001/Prompt2Robo-Qwen3-8B-MLX-4bit`);
-  it is downloaded on first use. For private repos open **Settings** at the top and paste a Hugging Face token (kept in memory only).
-- **Manual code** (last entry of each picker): no model on this side, anything loaded there is unloaded, and a code box appears. Paste a `def run(robot):` program; Run left / right / both simulate it on the current scene, in the same sandbox as model code, with frames, Replay, the checker warnings and strict tags, and the verdict of a loaded test example. The usual slips are repaired as for models (markdown fence, missing `def`). An empty box gives a message, a syntax error shows in the panel, text without a program is shown like a model's text answer. A manual side needs no request and counts as ready at once. With an empty request box only the manual sides run; a model side stays as it is and shows "needs a request". "Prompt sent to the model" then says that no model was used. The code stays in the box between runs and when you switch away and back, but not across a page reload.
-- **Memory:** only the two selected models stay loaded. Picking a model frees that side's old model first (references dropped, `gc.collect()`, then the MLX or PyTorch cache emptied; the Terminal prints "unloaded ..., memory released"), then loads the new one, so the peak is never old + new. If a run is still writing, the swap waits until it has finished (the panel says "waiting for the running generation"); it never pulls a model away from a run, and no new run starts meanwhile. The same model with the same template on both sides is loaded once and shared, and freed when neither side uses it. A different template or thinking setting counts as a different model. If a load fails, the old model of that side is gone too: the side is empty, shows the reason, and you pick a model again.
-- **Out of memory:** an `*-adapter` model loads a bf16 8B base (about 16 GB), so two of them do not fit on a 32 GB Mac, and with one of them the other side still counts. The panel then says so and the side stays empty: choose the MLX 4-bit version (about 4.6 GB). Do not set `PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0`, it can freeze the Mac.
-- "template" is `auto` normally: models trained with the Mac script use Qwen3's default template, the H100 model was trained in non-thinking mode
-  (the model folder's `p2r_meta.json` says which).
+You need an Apple-Silicon Mac (16 GB RAM or more is best), Python 3.10 or newer and about 10 GB of free disk.
 
-## Using the page
-- Type a request. **New random scene** uses the number typed in the field next to it (at least 1, no upper limit; Enter works too, empty or invalid input keeps the last good number). Training scenes have at most 6 cubes, so above 6 the page says so and the models are outside what they have seen. Above 12 the colours repeat (the dataset has 12), so refer to cubes by id. Cubes stay at least 10 cm apart, and at most 24 fit on the workspace that way: ask for more and you get 24 with the message "Only 24 cubes fit on the table". Random placing gets stuck from about 14 cubes, then a random part of a fixed 24-place grid is used, so a scene always comes back at once. **Load a test example** takes one of the 163 held-out examples (102 `eval` + 61 `eval_v2`, data_v2)
-  (never trained on) and reports automatically whether the task was solved (or the refusal was correct).
-  **ID** next to it finds one by id in any dataset version: pick the dataset and split at the top, then type part of the id (upper or lower case does not matter), Enter loads the first match, Esc or a click outside closes. Every side in Manual code mode also gets the example's reference answer in its code box. A refusal example has no program: the box stays as it was and the page says so.
-- **Scene layout** (top right): a 3D view with the cubes in their simulator colours and real heights, the floor grid, the robot base, x/y/z axes and left/right/front labels. Drag to orbit, wheel or pinch to zoom, double-click resets. The 2D button gives the top view. It follows the scene and needs no internet (plain canvas, no libraries).
-- Speed 1x is real time. The models write one at a time (memory), the two simulations run in parallel.
-- **Replay:** after a run, **Replay** under a simulation (or **Replay both**) plays the recorded frames again at the chosen speed, without the model or the simulator. Press it again or Esc to stop. A new run ends a replay and replaces the recording. Up to 1200 frames per side are kept (about 40 simulated seconds at full rate, at most about 50 MB); longer runs are thinned evenly, so the whole run is still there with fewer frames per second, and the last frame is always kept. A text answer has no frames, so nothing can be replayed.
-- **Floor grid:** the simulator picture shows an endless floor with 10 cm cells and bold lines every 1 m. The lines lie on multiples of 10 cm from the world origin (the robot base), so cells are real distances. 4 cm cells were tried too: at the camera distance they smear into a fine mesh in the far half of the picture and make the JPEG frames about 25 % bigger. The grid is only a look: `floor_view.py` builds a second model that is drawn but never stepped, the physics runs on the unchanged model from `sim/scene.py`.
-- **Collisions:** the simulation always runs to the end: touching a cube or the table with a finger or the arm does not stop it (cubes get pushed). Whenever the dataset checker would have aborted, the panel shows a warning with the simulated time and the reason ("dataset checker would stop here ...") and, at the end, "strict dataset checker: would FAIL". The "task solved" verdict looks only at the final state. The accuracy numbers (e.g. 131/163) come from the strict checker. For abort-on-contact in the app start with `P2R_STRICT=1 sh run_mac.sh`.
-- **Run left / Run right / Run both:** run one side alone or both. A single run keeps the other side's last result.
-- **Prompt format:** each side has a switch. *Objects line* sends "Objects: 1 (red), ..." before the request (all models up to v4). *Scene_Info JSON* sends the request, then the scene with positions, and the matching system prompt (the v5-scene models). *Auto* picks what the model was trained with, from `scene_info` in its `p2r_meta.json`. A model given the wrong format usually does worse. Each run shows the format used. **Prompt sent to the model** under each model picker shows the exact prompt of the last run: your request, with everything the app added highlighted, plus the system prompt.
-- **Robot in the picture:** the NEURA LARA 5 model of [Stack Lab](https://github.com/carlo2004/Simulation-Neura-LARA-5) (`lara_view.py`, `lara5/`). It is drawn only: the physics, the robot API and the checker stay the simulator's generic arm, which the dataset was verified with, so all results stay valid. The drawn arm follows the same gripper motion. Very far targets are beyond the real arm's reach, so the drawn gripper can fall a few centimetres short there (about 0.5% of frames in a test). The first start downloads the geometry from RoboDK once (`lara_assets.py`; it is not shipped because its licence does not allow that, see `lara5/NOTICE.md`). Without internet, or with `P2R_ARM=generic sh run_mac.sh`, the generic arm is drawn.
-- Programs run in a sandbox (no imports, only the documented robot API).
+1. Download this repo.
+2. Double-click `run_mac.command`, or run `sh run_mac.sh` in Terminal.
+3. The first start takes a few minutes, then http://localhost:8766 opens. Models download when you first use them.
+
+`sh run_mac.sh --mock` tries the page with fake models and no download. `P2R_PORT=9000 sh run_mac.sh` uses another port.
+
+## Examples
+
+These are real programs written by the models, run in the simulator. They are hand-picked successes: the same fine-tuned model solved 218 of 306 held-out examples, and most of the untuned model's programs fail.
+
+**Untuned Qwen3-8B against the fine-tuned model**
+
+![Pyramid duel](docs/duel-pyramid.gif)
+![2x2 square duel](docs/duel-square.gif)
+
+**Plain requests, fine-tuned model**
+
+| | |
+|---|---|
+| ![Pyramid](docs/pyramid.gif) | ![2x2 square](docs/square.gif) |
+| ![Remove a cube from the stack](docs/remove-from-stack.gif) | ![Top cube next to the stack](docs/top-next-to-stack.gif) |
+| ![Line](docs/line.gif) | ![Tower](docs/tower.gif) |
+
+## The page
+
+![The app after a run](docs/app.png)
+
+- **Models:** each side has a picker with base models, full models and adapters. Selecting one downloads it if needed and frees the side's old model.
+- **Manual code:** the last picker entry runs a pasted `def run(robot):` program, no model needed.
+- **Scene:** make a random scene with any number of cubes, or load a test example. Drag the 3D layout to look around.
+- **Run:** run the left side, the right side or both, then **Replay** the recording at any speed.
+- **Result:** a run always plays to the end. The panel shows whether the task was solved and what the stricter dataset checker would have flagged.
+- **Prompt format:** *Auto* picks what the model was trained with, or choose *Objects line* or *Scene_Info JSON* yourself.
+
+**ID** finds any example by id, in any dataset version and split:
+
+<img src="docs/id-search.png" alt="ID search with dataset and split pickers" width="480">
+
+## Models
+
+Public models work without a token. For private ones, open **Settings** and paste a Hugging Face token that can read them, or set `HF_TOKEN`. **Other…** in the picker takes a folder path or a Hugging Face link.
+
+| Name ends in | What it is |
+|---|---|
+| `-MLX-4bit` | Quantized for MLX, the fast choice |
+| `-full` | bf16 weights, loaded by MLX |
+| `-MLX-adapter` | LoRA adapter in MLX format, runs on a 4-bit base |
+| `-adapter` | PEFT adapter. Needs `.venv/bin/pip install torch peft`, a 16 GB base and a lot of RAM, so prefer the MLX version |
+
+The best public model to start with is `Prompt2Robo v3-full-4b, Qwen3-4B · MLX 4-bit` (2.3 GB, 131 of 163 solved).
+
+## Good to know
+
+- If memory runs out, the panel says so. Choose a 4-bit model instead.
+- Programs run in a sandbox: no imports, only the robot API.
+- The arm in the picture is the NEURA LARA 5 model by [Stack Lab](https://github.com/carlo2004/Simulation-Neura-LARA-5). It is drawn only: physics and checks use the simulator's generic arm. Its meshes download on first start (see `lara5/NOTICE.md`), and `P2R_ARM=generic` turns it off.
+- A shared copy of the app can contain `hf_readonly_token.txt`. Treat such a copy like a password. The file is ignored by git.
 
 ## Files
-`server.py` web server, `models_scan.py` model discovery/links/Hugging Face account list, `sim_worker.py` MuJoCo run + frame streaming, `floor_view.py` visual-only grid floor, `llm_backends.py` MLX/Transformers backends (all MLX work runs on one thread, `MLXThread`: MLX streams belong to a thread), `static/index.html` the page,
-`sim/` MuJoCo scene, robot API and checker (copied from the dataset repo `tools/`), `system_prompt.md`, `examples.jsonl` (held-out examples), `datasets/` (read-only copies of `data_v0` to `data_v5` and `data_posv0`, for the ID overlay).
+
+| Path | Purpose |
+|---|---|
+| `server.py`, `static/index.html` | Web server and page |
+| `models_scan.py`, `llm_backends.py` | Model discovery and MLX/Transformers backends |
+| `sim_worker.py`, `floor_view.py`, `lara_view.py`, `lara_assets.py` | Simulation runs and picture |
+| `sim/` | Scene, robot API and checker from the dataset repo |
+| `datasets/`, `examples.jsonl` | Dataset versions for the ID search, held-out examples |
