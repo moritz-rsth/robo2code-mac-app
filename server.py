@@ -1,6 +1,7 @@
 """Duel app: one prompt, two models, two live MuJoCo simulators side by side.   python server.py [--port 8766] [--mock]
 Standard library web server; the models run through MLX (see models.json)."""
 import argparse
+import base64
 import gzip
 import importlib
 import json
@@ -22,6 +23,7 @@ sys.path.insert(0, str(HERE / "sim"))
 import llm_backends  # noqa: E402
 import lara_assets  # noqa: E402
 import models_scan  # noqa: E402
+import recorder  # noqa: E402
 import scene_gen  # noqa: E402
 
 SYSTEM = (HERE / "system_prompt.md").read_text().strip()
@@ -376,8 +378,8 @@ def random_scene(n, seed):
 
 
 class Run:
-    def __init__(self):
-        self.events, self.cv, self.done = [], threading.Condition(), set()
+    def __init__(self, rid):
+        self.id, self.events, self.cv, self.done, self.videos = rid, [], threading.Condition(), set(), {}     # videos: side -> (path, file name)
 
     def emit(self, side, type_, **kw):
         with self.cv:
@@ -393,6 +395,7 @@ def work(run, side, req):
         answer_row = expects_answer(sample, None)                           # a question of the dataset: sim/check.py has no rule for it, see check_answer
         fmt = None
         text = (req.get("manual") or {}).get(side)                          # Manual code: the pasted text takes the place of the model's answer
+        model = "manual code" if text is not None else STATUS[side]["label"]     # for the file name of the video
         if text is not None:
             generation_over(run, side)
             run.emit(side, "format", text="Manual code", manual=True)
@@ -431,12 +434,19 @@ def work(run, side, req):
         job.write_text(json.dumps(dict(scene=req["scene"], code=code, sample=None if answer_row else sample, speed=req.get("speed", 4.0))))
         run.emit(side, "status", text="running in the simulator")
         p = subprocess.Popen([sys.executable, str(HERE / "sim_worker.py"), str(job)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        rec = recorder.Recorder(req.get("instruction"), model)               # the frames go to an MP4 on disk while they stream (Download video)
         for line in p.stdout:
             e = json.loads(line)
+            if e["t"] == "frame":
+                rec.add(base64.b64decode(e["jpg"]))
             if answer_row and e["t"] == "result" and e["executed"]:
                 e.update(success=False, reasons=["this question needs one short sentence, not a program: the arm must not move"])
             run.emit(side, e.pop("t"), kind="code", **e)
         p.wait()
+        video = rec.finish()
+        if video:
+            run.videos[side] = video
+            run.emit(side, "video", url=f"/api/video/{run.id}/{side}", name=video[1])
     except Exception as e:
         error = llm_backends.memory_hint("this model", other_model(side)) if llm_backends.is_oom(e) else f"{type(e).__name__}: {e}"
         run.emit(side, "result", kind="code", executed=False, error=error)
@@ -483,6 +493,15 @@ class Handler(BaseHTTPRequestHandler):
                 models_scan.refresh_account(HF_TOKEN["value"])
             ms = models_scan.list_models()
             self._json(dict(models=ms, bases=models_scan.mlx_bases(), status=STATUS, has_token=bool(HF_TOKEN["value"]), hf_models=len(models_scan.account_models()), note=models_scan.ACCOUNT["note"]))
+        elif self.path.startswith("/api/video/"):            # Download video: the recorded run of one side as a file
+            _, _, _, rid, side = (self.path.split("?")[0] + "//").split("/")[:5]
+            video = RUNS[rid].videos.get(side) if rid in RUNS else None
+            if not video or not video[0].exists():
+                return self._json({"error": "no video for this run (it may be one of the older runs, only the last 20 are kept)"}, 404)
+            b = video[0].read_bytes()
+            self.send_response(200); self.send_header("Content-Type", "video/mp4" if video[1].endswith(".mp4") else "image/gif")
+            self.send_header("Content-Disposition", f'attachment; filename="{video[1]}"'); self.send_header("Content-Length", str(len(b))); self.end_headers()
+            self.wfile.write(b)
         elif self.path.startswith("/api/events/"):
             run = RUNS.get(self.path.rsplit("/", 1)[1])
             if not run:
@@ -533,7 +552,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not sides or any(STATUS[s]["state"] != "ready" for s in sides):
                     return self._json({"error": "models are not ready yet"}, 409)
                 rid = uuid.uuid4().hex[:8]
-                RUNS[rid] = run = Run()
+                RUNS[rid] = run = Run(rid)
                 GENERATING.update((run, s) for s in sides)
             for side in sides:
                 threading.Thread(target=work, args=(run, side, req), daemon=True).start()

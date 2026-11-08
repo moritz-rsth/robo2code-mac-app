@@ -2,3 +2,4 @@ mujoco==3.17.0
 numpy
 pillow
 mlx-lm
+imageio-ffmpeg

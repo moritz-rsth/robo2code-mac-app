@@ -175,7 +175,7 @@ function sideHTML(id, label) {
     <details class="sent" id="pd-${id}"><summary>Prompt sent to the model</summary><pre id="pu-${id}">nothing sent yet</pre>
       <details><summary>System prompt</summary><pre id="ps-${id}"></pre></details></details>
     <div class="screen"><img id="img-${id}" alt=""><div class="ph" id="ph-${id}">waiting for a run</div><span class="tm" id="tm-${id}" hidden></span></div>
-    <div class="under"><button id="rp-${id}" disabled title="no recorded frames yet">Replay</button><button id="chain-${id}" disabled title="run this side first">Chain prompt</button><span class="cap">Floor grid: 1 cell = 10 cm, bold lines every 1 m</span></div>
+    <div class="under"><button id="rp-${id}" disabled title="no recorded frames yet">Replay</button><button id="chain-${id}" disabled title="run this side first">Chain prompt</button><button id="dl-${id}" disabled title="run this side first">Download video</button><span class="cap">Floor grid: 1 cell = 10 cm, bold lines every 1 m</span></div>
     <div class="chips" id="ch-${id}"></div><div class="errs" id="er-${id}"></div>
     <div class="msg" id="ms-${id}"></div>
     <pre id="code-${id}"></pre>`;
@@ -430,6 +430,7 @@ async function init() {
   $("#run").onclick = () => run(SIDES);
   for (const s of SIDES) $(`#run-${s}`).onclick = () => run([s]);
   for (const s of SIDES) $(`#chain-${s}`).onclick = () => chainPrompt(s);
+  for (const s of SIDES) $(`#dl-${s}`).onclick = () => downloadVideo(s);
   for (const s of SIDES) $(`#rp-${s}`).onclick = () => (rec[s].play ? stopReplay([s]) : startReplay([s]));
   $("#rpboth").onclick = () => (SIDES.some((s) => rec[s].play) ? stopReplay() : startReplay(SIDES));
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") stopReplay(); });
@@ -670,6 +671,16 @@ function chainPrompt(s) {
   const from = s === "base" ? "left" : "right", held = dropped.length ? ` Cube ${dropped.join(", ")} was in the gripper and has been let go.` : "";
   $("#hint").textContent = `Chained: this scene is where the ${from} side ended.${held} Type the next request.`;
 }
+// Download video: the server records every simulated run as an MP4 (H.264, plays in QuickTime, iMessage and WhatsApp) while it streams.
+const video = {};
+function videoButton(s, v, why) {
+  const b = $(`#dl-${s}`); video[s] = v;
+  b.disabled = !v; b.title = v ? `save ${v.name}` : why;
+}
+function downloadVideo(s) {
+  const v = video[s]; if (!v) return;
+  const a = document.createElement("a"); a.href = v.url; a.download = v.name; document.body.append(a); a.click(); a.remove();
+}
 // A manual side needs no request. With an empty request box only the manual sides run, a model side says why it did not.
 function run(sides = SIDES) {
   const instruction = $("#instr").value.trim(), manual = {};
@@ -680,7 +691,7 @@ function run(sides = SIDES) {
   for (const s of skipped) { $(`#st-${s}`).textContent = "needs a request"; $("#hint").textContent = "The request box is empty, so only the manual side ran."; }
   if (es) es.close();
   stopReplay();
-  for (const s of sides) { reset(s); rec[s] = newRec(); rec[s].live = true; chain[s] = null; }
+  for (const s of sides) { reset(s); rec[s] = newRec(); rec[s].live = true; chain[s] = null; videoButton(s, null, "the video is ready when the run has ended"); }
   replayButtons();
   running = true; runButtons();
   post("/api/run", { instruction, scene, sides, manual, example_id: exampleId, dataset: exampleDataset, speed: +$("#speed").value, formats: { base: $("#pf-base").value, finetuned: $("#pf-finetuned").value } }).then(({ run, error }) => {
@@ -697,6 +708,7 @@ function run(sides = SIDES) {
       else if (e.type === "generated") tag(s, `wrote ${e.answered ? "an answer" : "code"} in ${e.seconds} s`);
       else if (e.type === "flag") tag(s, `dataset checker would stop here (sim ${e.sim_s} s): ${e.msg}`, "warn");
       else if (e.type === "frame") { record(s, e); showFrame(s, e, false); }
+      else if (e.type === "video") videoButton(s, e);
       else if (e.type === "result") {
         chain[s] = { scene: e.next_scene, dropped: e.dropped || [], error: e.chain_error || "nothing was simulated, so there is no end state" };
         if (e.answered) { const ms = $(`#ms-${s}`); ms.classList.add("answer"); ms.style.display = "block"; ms.textContent = e.answer; $(`#code-${s}`).textContent = ""; tag(s, "answered");
@@ -710,7 +722,7 @@ function run(sides = SIDES) {
           if (e.strict_flags && e.strict_flags.length) tag(s, "strict dataset checker: would FAIL (collision)", "bad"); else if (e.strict_flags) tag(s, "strict dataset checker: no collision", "ok");
           if (e.reasons && e.reasons.length) $(`#er-${s}`).textContent = "checker: " + e.reasons.join(" · "); }
       }
-      else if (e.type === "done") { $(`#st-${s}`).textContent = "done"; endRecording(s); if (++finished === sides.length) { es.close(); running = false; runButtons(); } }
+      else if (e.type === "done") { $(`#st-${s}`).textContent = "done"; endRecording(s); if (!video[s]) videoButton(s, null, "no video: nothing was simulated"); if (++finished === sides.length) { es.close(); running = false; runButtons(); } }
     };
     es.onerror = () => { es.close(); sides.forEach(endRecording); running = false; runButtons(); };     // connection lost: what arrived so far can be replayed
   });
