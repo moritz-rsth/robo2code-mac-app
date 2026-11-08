@@ -19,7 +19,7 @@ sys.path[:0] = [str(HERE), str(HERE / "sim")]
 import mujoco  # noqa: E402
 from PIL import Image  # noqa: E402
 
-import check as C  # noqa: E402
+import importlib  # noqa: E402
 import floor_view  # noqa: E402
 import lara_view  # noqa: E402
 import robot as R  # noqa: E402
@@ -123,6 +123,7 @@ def next_scene(final, sim):
 def main():
     job = json.loads(Path(sys.argv[1]).read_text())
     code, scene, sample = job["code"], job["scene"], job.get("sample")
+    C = importlib.import_module((sample or {}).get("_check", "check"))   # check_posv1 for data_posv1 / data_posv2 rows
     remove_hook = install_frame_hook(max(float(job.get("speed", 4.0)), 0.1))
     t0 = time.time()
     final, err, sim = R.execute(scene, code)

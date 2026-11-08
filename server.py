@@ -2,6 +2,7 @@
 Standard library web server; the models run through MLX (see models.json)."""
 import argparse
 import gzip
+import importlib
 import json
 import os
 import random
@@ -26,14 +27,14 @@ import scene_gen  # noqa: E402
 SYSTEM = (HERE / "system_prompt.md").read_text().strip()
 _OBJECTS_LINE = "The user message lists the objects on the table (id and color), followed by the request. Only use these ids."
 SYSTEM_SCENE = SYSTEM.replace(_OBJECTS_LINE, "The user message gives the request, followed by Scene_Info: JSON with the objects on the table (id, color, start position) and the gripper. Only use these ids.")
-# ---- THE ONE PLACE TO SWAP: the extra line of the "answers" format. PROPOSAL, written from the spec. Replace it with the exact new line of data_posv1/system_prompt.md
-# once that file is final, and move it if the final file does not have it at the very end. Nothing else in the app depends on its wording.
-ANSWER_LINE = "If the request is a question about the scene, do not write code and do not move the arm: reply with one short plain sentence that answers it from Scene_Info."
-SYSTEM_ANSWERS = SYSTEM_SCENE + "\n\n" + ANSWER_LINE
+# The "answers" format: the system prompt of data_posv1 / data_posv2 byte for byte (system_prompt_answers.md), that is the Scene_Info prompt plus this line.
+ANSWER_LINE = "If the request is only a question about the scene, do not write code and do not move the arm: answer it in one short sentence."
+SYSTEM_ANSWERS = (HERE / "system_prompt_answers.md").read_text().strip()
+assert SYSTEM_ANSWERS.replace(ANSWER_LINE + "\n", "") == SYSTEM_SCENE, "system_prompt_answers.md must be the Scene_Info prompt plus ANSWER_LINE"
 PROMPTS = {"objects": ("Objects line", SYSTEM), "scene": ("Scene_Info JSON", SYSTEM_SCENE), "answers": ("Scene_Info + answers", SYSTEM_ANSWERS)}    # format -> name on the page, system prompt
 EXAMPLES = [json.loads(l) for l in (HERE / "examples.jsonl").read_text().splitlines() if l.strip()] if (HERE / "examples.jsonl").exists() else []
 BY_ID = {e["id"]: e for e in EXAMPLES}
-DATASETS = [n for n in ("data_posv1", "data_posv0", "data_v5", "data_v4", "data_v3", "data_v2", "data_v1", "data_v0") if (HERE / "datasets" / f"{n}.jsonl.gz").exists()]    # newest first
+DATASETS = [n for n in ("data_posv2", "data_posv1", "data_posv0", "data_v5", "data_v4", "data_v3", "data_v2", "data_v1", "data_v0") if (HERE / "datasets" / f"{n}.jsonl.gz").exists()]    # newest first
 DATASET_ROWS = {}                                        # name -> {id: row}, read when the ID overlay first asks for it
 RUNS, GEN_LOCK, LOAD_LOCK = {}, threading.Lock(), threading.Lock()
 BACKENDS = {"base": None, "finetuned": None}             # the only owners of the models: a model lives exactly as long as a side holds it
@@ -53,7 +54,8 @@ COLORS = ["red", "blue", "green", "yellow", "orange", "white", "purple", "cyan",
 TRAINED_CUBES = 6                                        # scenes of the datasets up to data_posv0 stay around 6 cubes; a model with "max_cubes" in p2r_meta.json says its own number
 GRID = [(x, y) for x in (0.30, 0.407, 0.513, 0.62) for y in (-0.28, -0.168, -0.056, 0.056, 0.168, 0.28)]    # workspace of random_scene, every 10.6 cm or more
 BIG_GRID = [(round(0.20 + 0.104 * i, 3), round(-0.364 + 0.104 * j, 3)) for i in range(6) for j in range(8)]     # above 24 cubes: 48 cells, 10.4 cm apart, all reachable and graspable
-_check = None
+NEW_CHECK = {"data_posv1", "data_posv2"}               # their rows need sim/check_posv1.py (shapes, chain steps, answers); copied unchanged from the dataset's tools/
+_check = {}
 
 
 def request_of(row):
@@ -74,7 +76,9 @@ def dataset_rows(name):
         rows = {}
         with gzip.open(HERE / "datasets" / f"{name}.jsonl.gz", "rt") as f:
             for r in map(json.loads, f):
-                if not r["user_prompt"].startswith("Objects:"):
+                if name in NEW_CHECK:
+                    r["_check"] = "check_posv1"                  # request-only prompts, as that checker expects
+                elif not r["user_prompt"].startswith("Objects:"):
                     head = ", ".join(f"{i} ({o['color']})" for i, o in r["scene"]["objects"].items())
                     r["request"], r["user_prompt"] = r["user_prompt"], f"Objects: {head}\n{r['user_prompt']}"
                 rows[r["id"]] = r
@@ -87,11 +91,10 @@ def find_example(example_id, dataset=None):
 
 
 def check_sample(sample, answer):
-    global _check
-    if _check is None:
-        import check as c
-        _check = c.check
-    ok, reasons = _check(dict(sample, assistant_answer=answer))
+    name = sample.get("_check", "check")
+    if name not in _check:
+        _check[name] = importlib.import_module(name).check
+    ok, reasons = _check[name](dict(sample, assistant_answer=answer))
     return bool(ok), list(reasons)[:4]
 
 
@@ -103,8 +106,10 @@ def check_answer(sample, text):
     """(True, False or None, reasons) for a reply to an expected_behavior "answer" row; None = the row gives no words to judge by.
     Stopgap for destination {"mode": "answer", "accept": [...], "reject": [...]} as drafted in the spec: every accept word must appear, no reject word may. An accept entry
     that is a list means any one of its words. Whole words, ignoring case, and "five" counts as "5". The stored words are all it knows: it cannot notice a stale row.
-    PLUG-IN POINT: when tools/check_posv1.py exists, copy it into sim/ as a new file and call its answer check here (it derives the true answer from the scene).
+    Rows of data_posv1 / data_posv2 use sim/check_posv1.py instead, which derives the true answer from the scene (the words below are only the fallback).
     sim/check.py stays as it is, the rows with mode "answer" never reach it."""
+    if sample.get("_check"):
+        return check_sample(sample, text)
     def norm(value):
         low = re.sub(r"[\s-]+", " ", str(value).lower())
         return re.sub(r"\b(" + "|".join(sorted(NUMBERS, key=len, reverse=True)) + r")\b", lambda m: NUMBERS[m.group(1)], low)
