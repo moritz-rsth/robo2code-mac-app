@@ -329,6 +329,11 @@ def load_request(req):
                 mark_failed(side, label, error)
 
 
+def side_format(side, mode):
+    """The prompt format a side uses: auto = what its model was trained with, else the one chosen on the page."""
+    return MODEL_FORMAT[side] if mode == "auto" else models_scan.format_name(mode) or "objects"
+
+
 def user_prompt(scene, instruction, scene_info=False):
     """The two user messages. Scene_Info is byte for byte what the models trained with it have seen; the others know only the Objects line.
     All formats from scene_v5 on use the Scene_Info message, only their system prompts (and thinking) differ (see PROMPTS)."""
@@ -489,11 +494,13 @@ def work(run, side, req):
                 return
         else:
             run.emit(side, "status", text="waiting for the model")
-            mode = (req.get("formats") or {}).get(side, "auto")             # auto = what the model was trained with
-            fmt = MODEL_FORMAT[side] if mode == "auto" else models_scan.format_name(mode) or "objects"
+            mode = (req.get("formats") or {}).get(side, "auto")
+            fmt = side_format(side, mode)
             name, system, scene_info = PROMPTS[fmt]
             msgs = [{"role": "system", "content": system},
                     {"role": "user", "content": user_prompt(req["scene"], req["instruction"], scene_info)}]
+            if req.get("prompts"):                       # Manual model use: the edited texts replace the two messages; format and thinking stay
+                msgs = [{"role": "system", "content": req["prompts"]["system"]}, {"role": "user", "content": req["prompts"]["user"]}]
             thinking = bool(getattr(BACKENDS[side], "thinking", False))
             run.emit(side, "format", text=name, auto=mode == "auto", thinking=thinking,
                      system=msgs[0]["content"], user=msgs[1]["content"], request=req["instruction"])      # shown as sent, so the prompt is no black box
@@ -699,6 +706,12 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/load":
             threading.Thread(target=load_request, args=(req,), daemon=True).start()
             self._json(dict(ok=True))
+        elif self.path == "/api/prompt":                    # Manual model use: the two messages a side would send now, to edit before a run
+            side = req.get("side")
+            if side not in BACKENDS or not req.get("scene"):
+                return self._json({"error": "unknown side or no scene"}, 400)
+            name, system, scene_info = PROMPTS[side_format(side, req.get("format", "auto"))]
+            self._json(dict(format=name, system=system, user=user_prompt(req["scene"], req.get("instruction") or "", scene_info)))
         elif self.path == "/api/export":
             run, side = RUNS.get(req.get("run")), req.get("side")
             video = run and run.videos.get(side)

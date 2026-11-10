@@ -93,6 +93,11 @@ dialog::backdrop { background: rgba(22,23,26,.25); }
 .editor textarea { position: relative; display: block; background: transparent; color: transparent; caret-color: var(--ink); }
 .editor textarea::placeholder { color: var(--muted); }
 .editor textarea::selection { background: rgba(47,111,228,.22); color: transparent; }
+.controls[inert] { opacity: .4; filter: grayscale(1); }
+.mpanel[hidden] { display: none; } .mpanel { margin-top: 14px; }
+.mpanel .mhead { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; } .mpanel .mhead b { font-weight: 600; }
+.mpanel textarea { font-family: var(--mono); font-size: 12px; line-height: 1.5; margin-bottom: 10px; }
+#mwarn { color: #845a05; font-size: 12.5px; }
 .exopts { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
 .exopts .sw { display: inline-flex; align-items: center; gap: 8px; font-size: 13.5px; cursor: pointer; user-select: none; }
 .exopts .sw small { color: var(--muted); font-size: 12px; }
@@ -170,6 +175,7 @@ details.settings .row input { font: inherit; font-size: 13px; border: 1px solid 
         <select id="speed"><option value="1">1x</option><option value="2">2x</option><option value="4" selected>4x</option><option value="8">8x</option><option value="20">20x</option></select>
         <button id="rpboth" disabled title="replay both simulations from the recorded frames">Replay both</button>
         <button id="run-base">Run left</button><button id="run-finetuned">Run right</button><button class="primary" id="run">Run both</button>
+        <button id="manualmode" title="edit the system and user prompt yourself before a model gets them">Manual model use</button>
       </div>
       <div class="row" style="margin-top:6px"><span id="hint" style="color:var(--muted);font-size:13px"></span><span class="cap" id="cubenote"></span></div>
       <details class="sent" id="rowreason" hidden><summary>Stored reasoning of this row</summary><div id="rowreasons"></div></details>
@@ -179,6 +185,14 @@ details.settings .row input { font: inherit; font-size: 13px; border: 1px solid 
       <canvas id="map"></canvas>
       <div class="cap" id="mapcap" style="margin-top:5px"></div>
     </div>
+  </div>
+
+  <div class="card mpanel" id="mpanel" hidden>
+    <div class="mhead"><b>Manual model use</b><span class="cap">These two messages go to the model exactly as written. Its prompt format and thinking settings stay as they are. A Scene_Info scene you edit is the scene that is simulated.</span>
+      <span style="flex:1"></span><button id="mfill-base">Prefill for left</button><button id="mfill-finetuned">Prefill for right</button><button id="mexit">Exit manual mode</button></div>
+    <label class="lab" for="msys">System prompt</label><textarea id="msys" rows="10" spellcheck="false"></textarea>
+    <label class="lab" for="muser">User prompt</label><textarea id="muser" rows="8" spellcheck="false"></textarea>
+    <div class="row" style="margin-top:0"><span id="mwarn"></span><span style="flex:1"></span><button id="mrun-base">Run left</button><button class="primary" id="mrun-finetuned">Run right</button></div>
   </div>
 
   <div class="duel">
@@ -478,6 +492,7 @@ async function init() {
   for (const s of SIDES) $(`#dl-${s}`).onclick = () => downloadVideo(s);
   for (const s of SIDES) { const ta = $(`#mc-${s}`); ta.oninput = () => paintEditor(s); ta.onscroll = () => { $(`#mh-${s}`).scrollTop = ta.scrollTop; }; paintEditor(s); }
   setupExport();
+  setupManualMode();
   for (const s of SIDES) $(`#rp-${s}`).onclick = () => (rec[s].play ? stopReplay([s]) : startReplay([s]));
   $("#rpboth").onclick = () => (SIDES.some((s) => rec[s].play) ? stopReplay() : startReplay(SIDES));
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") stopReplay(); });
@@ -577,6 +592,7 @@ const isManual = (side) => $(`#sel-${side}`).value === "__manual__";
 function showMode(side) {
   const v = $(`#sel-${side}`).value, manual = v === "__manual__";
   $(`#cu-${side}`).hidden = v !== "__custom__"; $(`#mw-${side}`).hidden = !manual; $(`#code-${side}`).hidden = manual; $(`#pf-${side}`).disabled = manual;
+  runButtons();                                                         // Manual model use cannot run a manual-code side
 }
 const chosen = (side) => models.find((m) => m.path === $(`#sel-${side}`).value);
 // The dropdown of an MLX adapter: the MLX bases of the list, the adapter's own one selected unless this side already runs on another.
@@ -726,6 +742,7 @@ const ready = {}, chain = {}; let running = false;
 function runButtons() {
   for (const s of SIDES) $(`#run-${s}`).disabled = running || !ready[s];
   $("#run").disabled = running || !SIDES.every((s) => ready[s]);
+  for (const s of SIDES) { const b = $(`#mrun-${s}`); b.disabled = running || !ready[s] || isManual(s); b.title = isManual(s) ? "this side runs manual code, it has no model" : ""; }
   for (const s of SIDES) {
     const b = $(`#chain-${s}`), c = chain[s];
     b.disabled = running || !c?.scene; b.title = c?.scene ? "continue from where this run ended: its end state becomes the scene and the request box is cleared" : c?.error || "run this side first";
@@ -788,11 +805,42 @@ const highlight = (code) => window.hljs ? hljs.highlight(code, { language: "pyth
 const looksLikeCode = (t) => /^\s*(def |run\(robot\)|robot\.)/m.test(t);
 function paintAnswer(s) { const p = $(`#code-${s}`), t = p.textContent; if (looksLikeCode(t)) p.innerHTML = highlight(t); }
 function paintEditor(s) { const ta = $(`#mc-${s}`), pre = $(`#mh-${s}`); pre.innerHTML = highlight(ta.value) + "\n"; pre.scrollTop = ta.scrollTop; }
+// Manual model use: the request and scene controls are locked, and the system and user message a side would send are shown to edit.
+// A run sends the edited texts instead (the server keeps the side's prompt format and thinking). The scene of an edited Scene_Info is simulated if it reads.
+async function fillPrompts(s) {
+  const r = await post("/api/prompt", { side: s, scene, instruction: $("#instr").value.trim(), format: $(`#pf-${s}`).value });
+  if (r.error) { $("#mwarn").textContent = r.error; return; }
+  $("#msys").value = r.system; $("#muser").value = r.user;
+  $("#mwarn").textContent = `Prefilled as the ${s === "base" ? "left" : "right"} side would send it (prompt: ${r.format}).`;
+}
+function manualPrompts() {
+  const user = $("#muser").value, k = user.indexOf("\n\nScene_Info:\n");
+  let instruction = user.startsWith("Objects:") ? user.slice(user.indexOf("\n") + 1) : user, sc = scene, warn = "";
+  if (k >= 0) {
+    instruction = user.slice(0, k);
+    try {
+      const v = JSON.parse(user.slice(k + 14)).scene;
+      if (!v || typeof v.objects !== "object" || !v.gripper) throw new Error("no objects or gripper");
+      sc = v;
+    } catch (e) { warn = "The Scene_Info JSON could not be read, so the current scene is simulated."; }
+  }
+  $("#mwarn").textContent = warn;
+  return { system: $("#msys").value, user, instruction: instruction.trim(), scene: sc };
+}
+function setManualMode(on) {
+  $(".controls").inert = on; $("#mpanel").hidden = !on; $("#manualmode").classList.toggle("on", on);
+  if (on) { fillPrompts(SIDES.find((s) => !isManual(s)) || "base"); $("#mpanel").scrollIntoView({ block: "nearest" }); }
+}
+function setupManualMode() {
+  $("#manualmode").onclick = () => setManualMode($("#mpanel").hidden);
+  $("#mexit").onclick = () => setManualMode(false);
+  for (const s of SIDES) { $(`#mfill-${s}`).onclick = () => fillPrompts(s); $(`#mrun-${s}`).onclick = () => run([s], manualPrompts()); }
+}
 // A manual side needs no request. With an empty request box only the manual sides run, a model side says why it did not.
-function run(sides = SIDES) {
-  const instruction = $("#instr").value.trim(), manual = {};
+function run(sides = SIDES, prompts = null) {
+  const instruction = prompts ? prompts.instruction : $("#instr").value.trim(), manual = {};
   for (const s of sides) if (isManual(s)) manual[s] = $(`#mc-${s}`).value;
-  const skipped = instruction ? [] : sides.filter((s) => !(s in manual));
+  const skipped = instruction || prompts ? [] : sides.filter((s) => !(s in manual));
   sides = sides.filter((s) => !skipped.includes(s));
   if (!sides.length || !scene) return;
   for (const s of skipped) { $(`#st-${s}`).textContent = "needs a request"; $("#hint").textContent = "The request box is empty, so only the manual side ran."; }
@@ -801,7 +849,8 @@ function run(sides = SIDES) {
   for (const s of sides) { reset(s); rec[s] = newRec(); rec[s].live = true; chain[s] = null; videoButton(s, null, "the video is ready when the run has ended"); }
   replayButtons();
   running = true; runButtons();
-  post("/api/run", { instruction, scene, sides, manual, example_id: exampleId, dataset: exampleDataset, speed: +$("#speed").value, formats: { base: $("#pf-base").value, finetuned: $("#pf-finetuned").value } }).then(({ run, error }) => {
+  post("/api/run", { instruction, scene: prompts ? prompts.scene : scene, sides, manual, prompts: prompts && { system: prompts.system, user: prompts.user },
+    example_id: prompts ? null : exampleId, dataset: prompts ? null : exampleDataset, speed: +$("#speed").value, formats: { base: $("#pf-base").value, finetuned: $("#pf-finetuned").value } }).then(({ run, error }) => {
     if (error) { $("#hint").textContent = error; running = false; runButtons(); sides.forEach(endRecording); return; }
     es = new EventSource("/api/events/" + run);
     let finished = 0;
