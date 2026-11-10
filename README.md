@@ -36,11 +36,11 @@ These are real programs written by the models, run in the simulator. They are ha
 ![The app after a run](docs/app.png)
 
 - **Models:** each side has a picker with base models, full models and adapters. Selecting one downloads it if needed and frees the side's old model.
-- **Manual code:** the last picker entry runs a `def run(robot):` program you type into the box under the simulation, where the other sides show the model's output. No model needed.
+- **Manual code:** the last picker entry runs a `def run(robot):` program you type into the box under the simulation, where the other sides show the model's output. No model needed. The box and the model's programs are syntax highlighted (highlight.js, needs internet; offline the text stays plain).
 - **Scene:** make a random scene with up to 48 cubes, or load a test example. Drag the 3D layout to look around.
 - **Scene generator:** the pencil next to **New random scene** adds towers (2 to 10 high), pyramids (2 to 5 layers), flat squares (2x2 to 4x4), lines and L, T and cross shapes, each at a random free spot, in one colour or mixed. The cube count cannot go below what they need, and any extra cubes are placed as single cubes.
 - **Run:** run the left side, the right side or both, then **Replay** the recording at any speed.
-- **Download video:** under each simulation, once its run has ended. Saves the run as an MP4 (H.264, 30 fps at simulated real time, plays in QuickTime, iMessage and WhatsApp), named after the request, the model and the time. Without ffmpeg it saves a GIF.
+- **Download video:** under each simulation, once its run has ended. Opens a small export overlay for that side: tick **Original prompt** (the request, typed into a message over the blurred scene) and **Model and reasoning** (the request flies into a model card, then the reasoning streams in under cycling "Baking…", "Marinating…" words, then the answer with syntax highlighting, then a short pause to read), set the text pace (25 words/s by default) and the simulation speed (0.5x to 4x), and press **Export**. The server renders a 1920x1080 MP4 (H.264, 30 fps, plays in QuickTime, iMessage and WhatsApp) in the background, named after the request, the model and the time. With both boxes off it is just the simulation. Without ffmpeg the button saves a GIF of the simulation instead.
 - **Chain prompt:** under each simulation. The end state of that side becomes the new scene and the request box is cleared, so the next request continues from there. A cube still in the gripper is let go.
 - **Result:** a run always plays to the end. The panel shows whether the task was solved and what the stricter dataset checker would have flagged.
 - **Prompt format:** *Auto* picks what the model was trained with, or choose one yourself (see the table below).
@@ -90,5 +90,6 @@ The best public model to start with is `Prompt2Robo v3-full-4b, Qwen3-4B · MLX 
 | `models_scan.py`, `llm_backends.py` | Model discovery and MLX/Transformers backends |
 | `sim_worker.py`, `floor_view.py`, `lara_view.py`, `lara_assets.py` | Simulation runs and picture |
 | `recorder.py` | Records each run into a video file (ffmpeg from `imageio-ffmpeg`) |
+| `exporter.py`, `fonts/` | Renders the shareable 1920x1080 export (Pillow, Pygments); Geist and Geist Mono fonts under the SIL Open Font License (`fonts/OFL.txt`) |
 | `sim/` | Scene, robot API and checkers from the dataset repo (`check_posv1.py` for data_posv1/2, `check_posv3.py` for data_posv3) |
 | `datasets/`, `examples.jsonl` | Dataset versions for the ID search, held-out examples |

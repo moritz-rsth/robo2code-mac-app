@@ -8,6 +8,7 @@ import json
 import os
 import random
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -57,6 +58,8 @@ STATUS = {s: dict(state="empty", label="", error=None) for s in BACKENDS}
 STATE = threading.Condition()                            # guards GENERATING, LOAD_SEQ and the step "all ready? then start a run" against a load
 GENERATING = set()                                       # (run, side) from the start of a run until that side's model has finished writing
 LOAD_SEQ = {s: 0 for s in BACKENDS}                      # newest load request per side: an older one that still waits gives up
+EXPORTS, EXPORT_LOCK = {}, threading.Lock()              # Export video: job id -> state; one export renders at a time (memory)
+EXPORT_DIR, EXPORT_KEEP = Path(tempfile.mkdtemp(prefix="p2r_exports_")), 6
 # Read-only token shipped with the app (hf_readonly_token.txt, ignored by git). Share the app only with people you trust; a token saved in Settings or HF_TOKEN wins.
 _tok_file = HERE / "hf_readonly_token.txt"
 DEFAULT_TOKEN = (_tok_file.read_text().strip() or None) if _tok_file.exists() else None
@@ -461,6 +464,7 @@ def random_scene(n, seed):
 class Run:
     def __init__(self, rid):
         self.id, self.events, self.cv, self.done, self.videos = rid, [], threading.Condition(), set(), {}     # videos: side -> (path, file name)
+        self.meta = {}                                   # side -> what the export draws before the simulation: request, model, reasoning, answer
 
     def emit(self, side, type_, **kw):
         with self.cv:
@@ -474,7 +478,7 @@ def work(run, side, req):
     try:
         sample = find_example(req.get("example_id"), req.get("dataset"))
         answer_row = expects_answer(sample, None)                           # a question of the dataset: sim/check.py has no rule for it, see check_answer
-        fmt = None
+        fmt, reasoning = None, ""
         text = (req.get("manual") or {}).get(side)                          # Manual code: the pasted text takes the place of the model's answer
         model = "manual code" if text is not None else STATUS[side]["label"]     # for the file name of the video
         if text is not None:
@@ -550,13 +554,43 @@ def work(run, side, req):
         video = rec.finish()
         if video:
             run.videos[side] = video
-            run.emit(side, "video", url=f"/api/video/{run.id}/{side}", name=video[1])
+            run.meta[side] = dict(prompt=req.get("instruction") or "", model=model, reasoning=reasoning, answer=text, frames=min(rec.n, recorder.MAX_FRAMES) + recorder.HOLD)
+            run.emit(side, "video", url=f"/api/video/{run.id}/{side}", name=video[1], run=run.id)
     except Exception as e:
         error = llm_backends.memory_hint("this model", other_model(side)) if llm_backends.is_oom(e) else f"{type(e).__name__}: {e}"
         run.emit(side, "result", kind="code", executed=False, error=error)
     finally:
         generation_over(run, side)
         run.emit(side, "done")
+
+
+def export(job, run, side, req):
+    """Export video: renders the 1920x1080 MP4 of one side in exporter.py (its own niced process, so the live app stays smooth)."""
+    st = EXPORTS[job]
+    with EXPORT_LOCK:
+        try:
+            st["state"] = "rendering"
+            meta, out = run.meta[side], EXPORT_DIR / f"{job}.mp4"
+            spec = dict(ffmpeg=recorder.FFMPEG, video=str(run.videos[side][0]), frames=meta["frames"], out=str(out),
+                        prompt=meta["prompt"] if req.get("prompt") else "", model=meta["model"] if req.get("model") else "",
+                        reasoning=meta["reasoning"], answer=meta["answer"], pace=float(req.get("pace") or 25), speed=float(req.get("speed") or 1))
+            spec_file = Path(tempfile.mkdtemp()) / "export.json"
+            spec_file.write_text(json.dumps(spec))
+            p = subprocess.Popen([sys.executable, str(HERE / "exporter.py"), str(spec_file)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+            for line in p.stdout:
+                e = json.loads(line)
+                st.update(progress=e.get("progress", st["progress"]), error=e.get("error"))
+                if e.get("done"):
+                    st["path"] = out
+            p.wait()
+            shutil.rmtree(spec_file.parent, ignore_errors=True)
+            if not st["path"] and not st["error"]:
+                st["error"] = "the export stopped without a video"
+        except Exception as e:
+            st["error"] = f"{type(e).__name__}: {e}"
+        st["state"] = "done"
+        for old in sorted(EXPORT_DIR.iterdir(), key=lambda q: q.stat().st_mtime)[:-EXPORT_KEEP]:
+            old.unlink(missing_ok=True)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -567,6 +601,12 @@ class Handler(BaseHTTPRequestHandler):
         b = json.dumps(obj).encode()
         self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(b))); self.end_headers()
         self.wfile.write(b)
+
+    def _file(self, path, name):
+        self.send_response(200); self.send_header("Content-Type", "video/mp4" if name.endswith(".mp4") else "image/gif")
+        self.send_header("Content-Disposition", f'attachment; filename="{name}"'); self.send_header("Content-Length", str(path.stat().st_size)); self.end_headers()
+        with path.open("rb") as f:
+            shutil.copyfileobj(f, self.wfile)
 
     def do_GET(self):
         if self.path in ("/", "/index.html"):
@@ -604,10 +644,17 @@ class Handler(BaseHTTPRequestHandler):
             video = RUNS[rid].videos.get(side) if rid in RUNS else None
             if not video or not video[0].exists():
                 return self._json({"error": "no video for this run (it may be one of the older runs, only the last 20 are kept)"}, 404)
-            b = video[0].read_bytes()
-            self.send_response(200); self.send_header("Content-Type", "video/mp4" if video[1].endswith(".mp4") else "image/gif")
-            self.send_header("Content-Disposition", f'attachment; filename="{video[1]}"'); self.send_header("Content-Length", str(len(b))); self.end_headers()
-            self.wfile.write(b)
+            self._file(*video)
+        elif self.path.startswith("/api/export/"):           # Export video: the state of a job, or with /file its finished MP4
+            job, _, rest = self.path.split("?")[0][len("/api/export/"):].partition("/")
+            st = EXPORTS.get(job)
+            if not st:
+                return self._json({"error": "unknown export"}, 404)
+            if rest != "file":
+                return self._json(dict(state=st["state"], progress=st["progress"], error=st["error"], name=st["name"], ready=bool(st["path"])))
+            if not st["path"] or not st["path"].exists():
+                return self._json({"error": "this export is not ready or no longer kept"}, 404)
+            self._file(st["path"], st["name"])
         elif self.path.startswith("/api/events/"):
             run = RUNS.get(self.path.rsplit("/", 1)[1])
             if not run:
@@ -652,6 +699,17 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/load":
             threading.Thread(target=load_request, args=(req,), daemon=True).start()
             self._json(dict(ok=True))
+        elif self.path == "/api/export":
+            run, side = RUNS.get(req.get("run")), req.get("side")
+            video = run and run.videos.get(side)
+            if not video or not video[0].exists() or side not in run.meta:
+                return self._json({"error": "no video for this run (it may be one of the older runs, only the last 20 are kept)"}, 404)
+            if not video[1].endswith(".mp4"):
+                return self._json({"error": "exporting needs ffmpeg (pip install imageio-ffmpeg)"}, 409)
+            job = uuid.uuid4().hex[:8]
+            EXPORTS[job] = dict(state="waiting", progress=0.0, error=None, path=None, name=video[1])
+            threading.Thread(target=export, args=(job, run, side, req), daemon=True).start()
+            self._json(dict(job=job))
         elif self.path == "/api/run":
             with STATE:
                 sides = [s for s in BACKENDS if s in req.get("sides", BACKENDS)]        # one side or both

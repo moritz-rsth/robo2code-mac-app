@@ -70,7 +70,7 @@ class Recorder:
         if self.proc is None:                # yuv420p + faststart: plays in QuickTime, Safari, iMessage and WhatsApp
             self.proc = subprocess.Popen([FFMPEG, "-loglevel", "error", "-y", "-f", "image2pipe", "-c:v", "mjpeg", "-framerate", str(FPS), "-i", "-",
                                           "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2:in_range=pc:out_range=tv,format=yuv420p",    # JPEG is full range, players want TV range
-                                          "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-movflags", "+faststart", str(self.path)],
+                                          "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-movflags", "+faststart", str(self.path)],
                                          stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.proc.stdin.write(jpg)
 

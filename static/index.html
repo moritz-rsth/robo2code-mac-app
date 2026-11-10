@@ -7,6 +7,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 <style>
 :root { --font: "Geist", system-ui, sans-serif; --mono: "Geist Mono", ui-monospace, monospace;
   --bg: #fbfbfa; --surface: #fff; --ink: #16171a; --muted: #6b6f76; --line: #e8e8e5; --link: #2f6fe4; --link-bg: #e9f0fd;
@@ -84,6 +86,20 @@ dialog::backdrop { background: rgba(22,23,26,.25); }
 .reason.cut { border-color: #f0dcae; } .reason.cut summary, .reason.cut summary b { color: #845a05; }
 .manualbox { margin: 10px 0 0; } .manualbox[hidden] { display: none; }
 .manualbox textarea { font-family: var(--mono); font-size: 12px; line-height: 1.5; min-height: 180px; }
+.editor { position: relative; }      /* the manual box: a highlighted copy (pre) under a textarea with transparent text, so typing stays a plain textarea */
+.editor pre.hl, .editor textarea { margin: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; font-family: var(--mono); font-size: 12px; line-height: 1.5;
+  white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; tab-size: 4; letter-spacing: 0; }
+.editor pre.hl { position: absolute; inset: 0; overflow: hidden; pointer-events: none; min-height: 0; max-height: none; border-color: transparent; background: var(--bg); color: var(--ink); }
+.editor textarea { position: relative; display: block; background: transparent; color: transparent; caret-color: var(--ink); }
+.editor textarea::placeholder { color: var(--muted); }
+.editor textarea::selection { background: rgba(47,111,228,.22); color: transparent; }
+.exopts { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+.exopts .sw { display: inline-flex; align-items: center; gap: 8px; font-size: 13.5px; cursor: pointer; user-select: none; }
+.exopts .sw small { color: var(--muted); font-size: 12px; }
+.exrow { display: flex; align-items: center; gap: 10px; font-size: 13.5px; } .exrow > label { width: 130px; flex: none; }
+.exrow input[type=range] { flex: 1; accent-color: var(--ink); } .exrow output { width: 92px; font-family: var(--mono); font-size: 12px; color: var(--muted); }
+#exprog { flex: 1 1 120px; height: 8px; accent-color: var(--link); } #exprog[hidden] { display: none; }
+#exstate { font-size: 12.5px; color: var(--muted); } #exstate.bad { color: var(--bad); }
 #rowreason { margin-top: 8px; } #rowreason pre { min-height: 0; max-height: 200px; font-family: var(--font); font-size: 13px; }
 #rowreason pre + pre { margin-top: 6px; }
 details.settings { margin-bottom: 14px; } details.settings summary { cursor: pointer; font-weight: 500; }
@@ -177,6 +193,17 @@ details.settings .row input { font: inherit; font-size: 13px; border: 1px solid 
   <div class="genadd"><select id="gentype" aria-label="Object type to add"></select><button id="genadd">Add object</button></div>
   <div class="genfoot"><span id="gentotal"></span><span style="flex:1"></span><button id="genclear">Remove all</button><button class="primary" id="genmake">New scene</button></div>
 </div></dialog>
+<dialog id="exdlg" aria-labelledby="exhead"><div class="genbox">
+  <div class="genhead"><b id="exhead">Export video</b><button id="exclose" aria-label="Close the export">×</button></div>
+  <p class="cap" id="exsub">A 1920x1080 MP4 (H.264) that plays in QuickTime, iMessage and WhatsApp.</p>
+  <div class="exopts">
+    <label class="sw"><input type="checkbox" id="exprompt" checked> Original prompt <small>the request, typed into a message</small></label>
+    <label class="sw"><input type="checkbox" id="exmodel" checked> Model and reasoning <small>the model's name, its reasoning if it has one, and its answer</small></label>
+    <div class="exrow"><label for="expace">Text pace</label><input type="range" id="expace" min="10" max="80" step="5" value="25"><output id="expacev" for="expace"></output></div>
+    <div class="exrow"><label for="exspeed">Simulation speed</label><select id="exspeed"><option value="0.5">0.5x</option><option value="1" selected>1x</option><option value="2">2x</option><option value="4">4x</option></select></div>
+  </div>
+  <div class="genfoot"><progress id="exprog" max="1" value="0" hidden></progress><span id="exstate"></span><span style="flex:1"></span><button class="primary" id="exgo">Export</button></div>
+</div></dialog>
 <dialog id="iddlg"><div class="idbox"><div class="idpick"><select id="idds" aria-label="Dataset"></select><select id="idsplit" aria-label="Split"></select></div><input id="idq" placeholder="search by id" autocomplete="off" spellcheck="false" aria-label="Search examples by id"><div id="idlist"></div></div></dialog>
 <script>
 const $ = (s, el = document) => el.querySelector(s);
@@ -195,7 +222,7 @@ function sideHTML(id, label) {
     <details class="reason" id="rz-${id}" hidden><summary id="rzs-${id}"></summary><pre id="rzt-${id}"></pre></details>
     <div class="msg" id="ms-${id}"></div>
     <pre id="code-${id}"></pre>
-    <div class="manualbox" id="mw-${id}" hidden><label class="lab" for="mc-${id}">Your code</label><textarea id="mc-${id}" rows="9" spellcheck="false" placeholder="def run(robot):\n    p = robot.get_object_position('1')\n    ..."></textarea></div>`;
+    <div class="manualbox" id="mw-${id}" hidden><label class="lab" for="mc-${id}">Your code</label><div class="editor"><pre class="hl" id="mh-${id}" aria-hidden="true"></pre><textarea id="mc-${id}" rows="9" spellcheck="false" placeholder="def run(robot):\n    p = robot.get_object_position('1')\n    ..."></textarea></div></div>`;
 }
 
 // ---- scene layout: 2D top view or a 3D view to orbit. World: x 0..0.8 (front), y -0.4..0.4 (+y = left), z up; the robot base is the origin.
@@ -448,6 +475,8 @@ async function init() {
   for (const s of SIDES) $(`#run-${s}`).onclick = () => run([s]);
   for (const s of SIDES) $(`#chain-${s}`).onclick = () => chainPrompt(s);
   for (const s of SIDES) $(`#dl-${s}`).onclick = () => downloadVideo(s);
+  for (const s of SIDES) { const ta = $(`#mc-${s}`); ta.oninput = () => paintEditor(s); ta.onscroll = () => { $(`#mh-${s}`).scrollTop = ta.scrollTop; }; paintEditor(s); }
+  setupExport();
   for (const s of SIDES) $(`#rp-${s}`).onclick = () => (rec[s].play ? stopReplay([s]) : startReplay([s]));
   $("#rpboth").onclick = () => (SIDES.some((s) => rec[s].play) ? stopReplay() : startReplay(SIDES));
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") stopReplay(); });
@@ -476,7 +505,7 @@ async function pickExample(e) {
   const a = await (await fetch("/api/answer/" + encodeURIComponent(e.id) + (e.dataset ? "?dataset=" + e.dataset : ""))).json();
   if (exampleId === e.id) rowReasoning(a.reasoning || []);           // unless another scene came meanwhile
   if (!manual.length) return;
-  if (a.program) for (const s of manual) $(`#mc-${s}`).value = a.answer;
+  if (a.program) for (const s of manual) { $(`#mc-${s}`).value = a.answer; paintEditor(s); }
   else $("#hint").textContent += ` · this sample's answer is ${a.expected === "answer" ? "a sentence" : "a refusal"}, so the code box stays as it was`;
 }
 function setupIdSearch() {
@@ -709,16 +738,55 @@ function chainPrompt(s) {
   const from = s === "base" ? "left" : "right", held = dropped.length ? ` Cube ${dropped.join(", ")} was in the gripper and has been let go.` : "";
   $("#hint").textContent = `Chained: this scene is where the ${from} side ended.${held} Type the next request.`;
 }
-// Download video: the server records every simulated run as an MP4 (H.264, plays in QuickTime, iMessage and WhatsApp) while it streams.
-const video = {};
+// Download video: the server records every simulated run while it streams. The button opens the export overlay, which has the server (exporter.py)
+// render a 1920x1080 MP4: the prompt, the hand-off to the model, its reasoning and answer, then the simulation. Without ffmpeg it saves the recorded GIF.
+const video = {}, exporting = {};
+let exportSide = null;
 function videoButton(s, v, why) {
   const b = $(`#dl-${s}`); video[s] = v;
-  b.disabled = !v; b.title = v ? `save ${v.name}` : why;
+  b.disabled = !v; b.title = v ? `export ${v.name}` : why;
+}
+function saveFile(url, name) {
+  const a = document.createElement("a"); a.href = url; a.download = name; document.body.append(a); a.click(); a.remove();
 }
 function downloadVideo(s) {
   const v = video[s]; if (!v) return;
-  const a = document.createElement("a"); a.href = v.url; a.download = v.name; document.body.append(a); a.click(); a.remove();
+  if (!v.name.endsWith(".mp4")) return saveFile(v.url, v.name);
+  exportSide = s; exportState(s);
+  $("#exhead").textContent = `Export video · ${s === "base" ? "left" : "right"} side`; $("#exdlg").showModal();
 }
+function exportState(s) {                                               // the overlay shows the export of the side it was opened for
+  if (s !== exportSide) return;
+  const x = exporting[s] || {}, prog = $("#exprog"), st = $("#exstate");
+  $("#exgo").disabled = !!x.busy; prog.hidden = !x.busy && !x.done; prog.value = x.progress || 0;
+  st.textContent = x.text || ""; st.className = x.error ? "bad" : "";
+}
+function setupExport() {
+  const dlg = $("#exdlg"), pace = () => { $("#expacev").textContent = `${$("#expace").value} words/s`; };
+  $("#expace").oninput = pace; pace();
+  $("#exclose").onclick = () => dlg.close();
+  dlg.onclick = (ev) => { if (ev.target === dlg) dlg.close(); };
+  $("#exgo").onclick = async () => {
+    const s = exportSide, v = video[s]; if (!v) return;
+    exporting[s] = { busy: true, progress: 0, text: "starting…" }; exportState(s);
+    const r = await post("/api/export", { run: v.run, side: s, prompt: $("#exprompt").checked, model: $("#exmodel").checked, pace: +$("#expace").value, speed: +$("#exspeed").value });
+    if (r.error) { exporting[s] = { error: true, text: r.error }; return exportState(s); }
+    const tick = async () => {
+      const st = await (await fetch(`/api/export/${r.job}`)).json();
+      if (st.error) exporting[s] = { error: true, text: st.error };
+      else if (st.ready) { exporting[s] = { done: true, progress: 1, text: `saved ${st.name}` }; saveFile(`/api/export/${r.job}/file`, st.name); }
+      else { exporting[s] = { busy: true, progress: st.progress, text: st.state === "waiting" ? "waiting for the other export" : `rendering… ${Math.round(st.progress * 100)} %` }; setTimeout(tick, 600); }
+      exportState(s);
+    };
+    tick();
+  };
+}
+// Syntax highlighting (highlight.js): a model's program once it has streamed, and the manual box while you type. Without highlight.js (offline) the text stays plain.
+const escapeHTML = (t) => t.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+const highlight = (code) => window.hljs ? hljs.highlight(code, { language: "python", ignoreIllegals: true }).value : escapeHTML(code);
+const looksLikeCode = (t) => /^\s*(def |run\(robot\)|robot\.)/m.test(t);
+function paintAnswer(s) { const p = $(`#code-${s}`), t = p.textContent; if (looksLikeCode(t)) p.innerHTML = highlight(t); }
+function paintEditor(s) { const ta = $(`#mc-${s}`), pre = $(`#mh-${s}`); pre.innerHTML = highlight(ta.value) + "\n"; pre.scrollTop = ta.scrollTop; }
 // A manual side needs no request. With an empty request box only the manual sides run, a model side says why it did not.
 function run(sides = SIDES) {
   const instruction = $("#instr").value.trim(), manual = {};
@@ -770,7 +838,7 @@ function run(sides = SIDES) {
           if (e.strict_flags && e.strict_flags.length) tag(s, "strict dataset checker: would FAIL (collision)", "bad"); else if (e.strict_flags) tag(s, "strict dataset checker: no collision", "ok");
           if (e.reasons && e.reasons.length) $(`#er-${s}`).textContent = "checker: " + e.reasons.join(" · "); }
       }
-      else if (e.type === "done") { $(`#st-${s}`).textContent = "done"; endRecording(s); if (!video[s]) videoButton(s, null, "no video: nothing was simulated"); if (++finished === sides.length) { es.close(); running = false; runButtons(); } }
+      else if (e.type === "done") { $(`#st-${s}`).textContent = "done"; endRecording(s); paintAnswer(s); if (!video[s]) videoButton(s, null, "no video: nothing was simulated"); if (++finished === sides.length) { es.close(); running = false; runButtons(); } }
     };
     es.onerror = () => { es.close(); sides.forEach(endRecording); running = false; runButtons(); };     // connection lost: what arrived so far can be replayed
   });
