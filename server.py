@@ -33,11 +33,22 @@ SYSTEM_SCENE = SYSTEM.replace(_OBJECTS_LINE, "The user message gives the request
 ANSWER_LINE = "If the request is only a question about the scene, do not write code and do not move the arm: answer it in one short sentence."
 SYSTEM_ANSWERS = (HERE / "system_prompt_answers.md").read_text().strip()
 assert SYSTEM_ANSWERS.replace(ANSWER_LINE + "\n", "") == SYSTEM_SCENE, "system_prompt_answers.md must be the Scene_Info prompt plus ANSWER_LINE"
-PROMPTS = {"objects": ("Objects line", SYSTEM), "scene": ("Scene_Info JSON", SYSTEM_SCENE), "answers": ("Scene_Info + answers", SYSTEM_ANSWERS)}    # format -> name on the page, system prompt
+# data_posv3: its system prompt byte for byte (system_prompt_posv3.md), that is the answers prompt plus THINK_LINE. A posv3 model trained without
+# reasoning gets the same prompt without that line, which is the answers prompt again.
+THINK_LINE = "Before the code, think briefly: what the scene shows, the goal, the plan, and where the gripper must turn or drop a cube."
+SYSTEM_POSV3 = (HERE / "system_prompt_posv3.md").read_text().strip()
+SYSTEM_POSV3_NOTHINK = SYSTEM_POSV3.replace(THINK_LINE + "\n", "")
+assert SYSTEM_POSV3_NOTHINK != SYSTEM_POSV3 and SYSTEM_POSV3_NOTHINK == SYSTEM_ANSWERS, "system_prompt_posv3.md must be the answers prompt plus THINK_LINE"
+# format (models_scan.PROMPT_FORMATS, documented there) -> name on the page, system prompt, Scene_Info JSON in the user message (else the Objects line)
+PROMPTS = {"objects": ("Objects line", SYSTEM, False), "scene_v5": ("Scene_Info JSON", SYSTEM_SCENE, True), "answers_posv1": ("Scene_Info + answers", SYSTEM_ANSWERS, True),
+           "posv3_think": ("posv3, thinking", SYSTEM_POSV3, True), "posv3_nothink": ("posv3, no thinking", SYSTEM_POSV3_NOTHINK, True)}
+assert set(PROMPTS) == set(models_scan.PROMPT_FORMATS)
+ANSWERING = {"answers_posv1", "posv3_think", "posv3_nothink"}         # formats whose models also answer scene questions in one sentence
 EXAMPLES = [json.loads(l) for l in (HERE / "examples.jsonl").read_text().splitlines() if l.strip()] if (HERE / "examples.jsonl").exists() else []
 BY_ID = {e["id"]: e for e in EXAMPLES}
-DATASETS = [n for n in ("data_posv2", "data_posv1", "data_posv0", "data_v5", "data_v4", "data_v3", "data_v2", "data_v1", "data_v0") if (HERE / "datasets" / f"{n}.jsonl.gz").exists()]    # newest first
+DATASETS = [n for n in ("data_posv3", "data_posv2", "data_posv1", "data_posv0", "data_v5", "data_v4", "data_v3", "data_v2", "data_v1", "data_v0") if (HERE / "datasets" / f"{n}.jsonl.gz").exists()]    # newest first
 DATASET_ROWS = {}                                        # name -> {id: row}, read when the ID overlay first asks for it
+PROVENANCE = ("source", "family", "start_state")         # data_posv3: where a row comes from, shown in the row info
 RUNS, GEN_LOCK, LOAD_LOCK = {}, threading.Lock(), threading.Lock()
 BACKENDS = {"base": None, "finetuned": None}             # the only owners of the models: a model lives exactly as long as a side holds it
 MODEL_KEY = {"base": None, "finetuned": None}            # what each side holds (see model_key); equal keys = one shared model
@@ -56,7 +67,9 @@ COLORS = ["red", "blue", "green", "yellow", "orange", "white", "purple", "cyan",
 TRAINED_CUBES = 6                                        # scenes of the datasets up to data_posv0 stay around 6 cubes; a model with "max_cubes" in p2r_meta.json says its own number
 GRID = [(x, y) for x in (0.30, 0.407, 0.513, 0.62) for y in (-0.28, -0.168, -0.056, 0.056, 0.168, 0.28)]    # workspace of random_scene, every 10.6 cm or more
 BIG_GRID = [(round(0.20 + 0.104 * i, 3), round(-0.364 + 0.104 * j, 3)) for i in range(6) for j in range(8)]     # above 24 cubes: 48 cells, 10.4 cm apart, all reachable and graspable
-NEW_CHECK = {"data_posv1", "data_posv2"}               # their rows need sim/check_posv1.py (shapes, chain steps, answers); copied unchanged from the dataset's tools/
+# Rows of these versions are checked with their own checker in sim/, copied unchanged from the dataset's tools/: check_posv1.py (shapes, chain steps, answers),
+# check_posv3.py (check_posv1 plus the strict grasp rule and the outside_area constraint).
+NEW_CHECK = {"data_posv1": "check_posv1", "data_posv2": "check_posv1", "data_posv3": "check_posv3"}
 _check = {}
 
 
@@ -68,7 +81,7 @@ def request_of(row):
 
 def expects_answer(sample, fmt):
     """Is a plain-text reply here an answer to a scene question? The dataset row decides. Without a row only the format can tell, and a refusal looks the same."""
-    return sample.get("expected_behavior") == "answer" if sample else fmt == "answers"
+    return sample.get("expected_behavior") == "answer" if sample else fmt in ANSWERING
 
 
 def dataset_rows(name):
@@ -79,7 +92,7 @@ def dataset_rows(name):
         with gzip.open(HERE / "datasets" / f"{name}.jsonl.gz", "rt") as f:
             for r in map(json.loads, f):
                 if name in NEW_CHECK:
-                    r["_check"] = "check_posv1"                  # request-only prompts, as that checker expects
+                    r["_check"] = NEW_CHECK[name]                # request-only prompts, as that checker expects
                 elif not r["user_prompt"].startswith("Objects:"):
                     head = ", ".join(f"{i} ({o['color']})" for i, o in r["scene"]["objects"].items())
                     r["request"], r["user_prompt"] = r["user_prompt"], f"Objects: {head}\n{r['user_prompt']}"
@@ -108,7 +121,7 @@ def check_answer(sample, text):
     """(True, False or None, reasons) for a reply to an expected_behavior "answer" row; None = the row gives no words to judge by.
     Stopgap for destination {"mode": "answer", "accept": [...], "reject": [...]} as drafted in the spec: every accept word must appear, no reject word may. An accept entry
     that is a list means any one of its words. Whole words, ignoring case, and "five" counts as "5". The stored words are all it knows: it cannot notice a stale row.
-    Rows of data_posv1 / data_posv2 use sim/check_posv1.py instead, which derives the true answer from the scene (the words below are only the fallback).
+    Rows of data_posv1 / data_posv2 / data_posv3 use sim/check_posv1.py or sim/check_posv3.py instead, which derives the true answer from the scene (the words below are only the fallback).
     sim/check.py stays as it is, the rows with mode "answer" never reach it."""
     if sample.get("_check"):
         return check_sample(sample, text)
@@ -234,6 +247,9 @@ def load_side(side, info, thinking=None, seq=None):
             return
         set_loading(side, label, seq)
         try:
+            meta = models_scan.read_meta(info, HF_TOKEN["value"])
+            if thinking is None:                               # the template menu wins; else enable_thinking or prompt_format of p2r_meta.json, else as before
+                thinking = models_scan.thinking_of(meta, info["thinking"])
             cfg = models_scan.backend_cfg(info, thinking)
             key = model_key(cfg)
             if key != MODEL_KEY[side]:
@@ -246,7 +262,6 @@ def load_side(side, info, thinking=None, seq=None):
                     print(f"loading {side}: {label} ...", flush=True)
                     BACKENDS[side] = llm_backends.make(cfg)
                 MODEL_KEY[side] = key
-            meta = models_scan.read_meta(info, HF_TOKEN["value"])
             MODEL_FORMAT[side] = models_scan.prompt_format(meta)
             base = models_scan.base_info(info["base"]) if info.get("base") else None
             with STATE:
@@ -313,11 +328,77 @@ def load_request(req):
 
 def user_prompt(scene, instruction, scene_info=False):
     """The two user messages. Scene_Info is byte for byte what the models trained with it have seen; the others know only the Objects line.
-    The "answers" format uses the Scene_Info message too, only its system prompt differs (see PROMPTS)."""
+    All formats from scene_v5 on use the Scene_Info message, only their system prompts (and thinking) differ (see PROMPTS)."""
     if scene_info:
         return instruction + "\n\nScene_Info:\n" + json.dumps({"scene": scene})
     objs = ", ".join(f"{i} ({o['color']})" for i, o in scene["objects"].items())
     return f"Objects: {objs}\n{instruction}"
+
+
+class ThinkSplitter:
+    """Splits a streamed reply into reasoning and the rest while it streams: feed(piece) -> [("think" | "token", text), ...].
+    Only a <think> block at the very start counts (Qwen3's thinking format); the tags themselves never reach the page, even when split over pieces.
+    thinking=True (the chat template opened the thinking mode): the reply is reasoning until </think> even if the model leaves out the opening <think>,
+    as some chat templates write that tag into the prompt. tagged then says whether any tag came at all (see split_think)."""
+    OPEN, CLOSE = "<think>", "</think>"
+
+    def __init__(self, thinking=False):
+        self.state, self.buf, self.lead, self.thinking = "start", "", {"think": True, "token": True}, thinking   # lead: no non-blank text of that kind sent yet
+        self.tagged = False
+
+    def _out(self, kind, text):
+        if self.lead[kind]:
+            text = text.lstrip()
+            self.lead[kind] = not text
+        return [(kind, text)] if text else []
+
+    def _reply(self, text):
+        return self._out("token", text)
+
+    def feed(self, piece):
+        self.buf += piece
+        if self.state == "start":
+            s = self.buf.lstrip()
+            if not s or (self.OPEN.startswith(s) and s != self.OPEN):
+                return []
+            if s.startswith(self.OPEN):
+                self.state, self.buf, self.tagged = "think", s[len(self.OPEN):], True
+            elif self.thinking:
+                self.state, self.buf = "think", s
+            else:
+                self.state, text, self.buf = "reply", self.buf, ""
+                return self._reply(text)
+        if self.state == "think":
+            if self.CLOSE in self.buf:
+                inner, rest = self.buf.split(self.CLOSE, 1)
+                self.state, self.buf, self.tagged = "reply", "", True
+                return self._out("think", inner.rstrip()) + self._reply(rest)
+            keep = next((k for k in range(len(self.CLOSE) - 1, 0, -1) if self.buf.endswith(self.CLOSE[:k])), 0)     # maybe the start of </think>
+            text = self.buf[:len(self.buf) - keep]
+            text = text.rstrip()                                    # blanks wait for what follows: before </think> they are dropped
+            self.buf = self.buf[len(text):]
+            return self._out("think", text)
+        text, self.buf = self.buf, ""
+        return self._reply(text)
+
+    def flush(self):
+        """End of the stream: whatever is still held back."""
+        text, self.buf = self.buf, ""
+        return self._out("think", text) if self.state == "think" else self._reply(text)
+
+
+def split_think(text, thinking=False):
+    """A whole reply -> (reasoning, reply, closed). reasoning = the leading <think> block ("" if there is none), reply = what follows </think>;
+    closed is False if the block never ended (the token limit came first), then reply is "". With thinking on, a </think> without the opening tag
+    ends the reasoning too. A reply without any tag is all reply, also with thinking on (ThinkSplitter.tagged tells the page to move it)."""
+    s = text.replace("<|im_end|>", "").lstrip()
+    if s.startswith("<think>"):
+        inner, tag, rest = s[len("<think>"):].partition("</think>")
+        return inner.strip(), rest.strip(), bool(tag)
+    if thinking and "</think>" in s:
+        inner, _, rest = s.partition("</think>")
+        return inner.strip(), rest.strip(), True
+    return "", text, True
 
 
 def extract_code(text):
@@ -405,23 +486,46 @@ def work(run, side, req):
         else:
             run.emit(side, "status", text="waiting for the model")
             mode = (req.get("formats") or {}).get(side, "auto")             # auto = what the model was trained with
-            fmt = MODEL_FORMAT[side] if mode == "auto" else mode if mode in PROMPTS else "objects"
-            name, system = PROMPTS[fmt]
+            fmt = MODEL_FORMAT[side] if mode == "auto" else models_scan.format_name(mode) or "objects"
+            name, system, scene_info = PROMPTS[fmt]
             msgs = [{"role": "system", "content": system},
-                    {"role": "user", "content": user_prompt(req["scene"], req["instruction"], fmt != "objects")}]
-            run.emit(side, "format", text=name, auto=mode == "auto",
+                    {"role": "user", "content": user_prompt(req["scene"], req["instruction"], scene_info)}]
+            thinking = bool(getattr(BACKENDS[side], "thinking", False))
+            run.emit(side, "format", text=name, auto=mode == "auto", thinking=thinking,
                      system=msgs[0]["content"], user=msgs[1]["content"], request=req["instruction"])      # shown as sent, so the prompt is no black box
-            text, t0, n = "", None, 0
+            text, t0, n, split, coding = "", None, 0, ThinkSplitter(thinking), False
+            limit = llm_backends.max_tokens(thinking or fmt == "posv3_think")      # reasoning + code: more room than for code alone
             with GEN_LOCK:                               # one model generates at a time (memory); the simulators run in parallel
-                run.emit(side, "status", text="writing the reply" if fmt == "answers" else "writing code")
+                writing = "writing the reply" if fmt in ANSWERING else "writing code"
+                run.emit(side, "status", text="thinking" if thinking else writing)
                 if BACKENDS[side] is None:
                     raise RuntimeError("no model loaded on this side")
-                for piece in BACKENDS[side].stream(msgs):
+                for piece in BACKENDS[side].stream(msgs, max_new_tokens=limit):
                     t0 = t0 or time.time()
                     text, n = text + piece, n + 1
-                    run.emit(side, "token", text=piece)
+                    for kind, part in split.feed(piece):         # the reasoning goes to the Reasoning box, the rest to the code box
+                        if kind == "token" and thinking and not coding:
+                            coding = True
+                            run.emit(side, "status", text=writing)
+                        run.emit(side, kind, text=part)
+                for kind, part in split.flush():
+                    run.emit(side, kind, text=part)
             generation_over(run, side)
-            run.emit(side, "generated", seconds=round(time.time() - (t0 or time.time()), 1), pieces=n, answered=not extract_code(text)[0] and expects_answer(sample, fmt))
+            if thinking and not split.tagged and text.strip():           # thinking on, but the model wrote no tag at all: it was the reply, not reasoning
+                run.emit(side, "unthought", text=text.strip())
+            reasoning, text, closed = split_think(text, thinking)
+            if reasoning or not closed:
+                run.emit(side, "thought", words=len(reasoning.split()), closed=closed, empty=closed and not text.strip())
+            run.emit(side, "generated", seconds=round(time.time() - (t0 or time.time()), 1), pieces=n, answered=closed and bool(text.strip()) and not extract_code(text)[0] and expects_answer(sample, fmt),
+                     stopped=not closed or bool(reasoning and not text.strip()))
+            if not closed:                               # half a reasoning may hold half a program: nothing of it runs
+                run.emit(side, "result", kind="code", executed=False, unfinished="reasoning",
+                         error=f"the model stopped while still reasoning (no </think> within {limit} new tokens): no code, answer or refusal, so nothing was run")
+                return
+            if reasoning and not text.strip():
+                run.emit(side, "result", kind="code", executed=False, unfinished="empty",
+                         error="the model ended its reasoning but wrote no answer after </think>: no code, answer or refusal, so nothing was run")
+                return
         code, notes = extract_code(text)
         if not code:
             kw = text_result(sample, fmt, text)
@@ -479,13 +583,15 @@ class Handler(BaseHTTPRequestHandler):
             if name not in DATASETS:
                 return self._json({"error": "unknown dataset"}, 404)
             self._json(dict(rows=[dict(id=e["id"], subcategory=e.get("subcategory", ""), split=e.get("split", ""), scene=e["scene"], dataset=name,
-                                       instruction=e.get("request") or request_of(e)) for e in dataset_rows(name).values()]))
+                                       instruction=e.get("request") or request_of(e), reasoning=bool(e.get("reasoning")),
+                                       **{k: e[k] for k in PROVENANCE if e.get(k)}) for e in dataset_rows(name).values()]))
         elif self.path.startswith("/api/answer/"):           # the reference answer of one example; /api/config stays light without them
             path, _, dataset = self.path.partition("?dataset=")
             e = find_example(path.rsplit("/", 1)[1], dataset)
             if not e:
                 return self._json({"error": "unknown example"}, 404)
-            self._json(dict(id=e["id"], answer=e["assistant_answer"], program=bool(extract_code(e["assistant_answer"])[0]), expected=e.get("expected_behavior")))
+            self._json(dict(id=e["id"], answer=e["assistant_answer"], program=bool(extract_code(e["assistant_answer"])[0]), expected=e.get("expected_behavior"),
+                            reasoning=list(e.get("reasoning") or [])))      # data_posv3 train rows: the two stored reasonings of the answer
         elif self.path == "/api/status":
             self._json(STATUS)
         elif self.path.split("?")[0] == "/api/models":
@@ -563,8 +669,8 @@ class Handler(BaseHTTPRequestHandler):
 
 def autoload(mock):
     if mock:
-        for side, cfg, fmt, cubes in (("base", {"backend": "mock", "label": "mock base (broken placement, forgets def)", "broken": True, "drop_def": True}, "objects", TRAINED_CUBES),
-                                      ("finetuned", {"backend": "mock", "label": "mock fine-tuned (answers questions)", "answers": True}, "answers", 27)):
+        for side, cfg, fmt, cubes in (("base", {"backend": "mock", "label": "mock base (broken placement, forgets def)", "broken": True, "drop_def": True, "empty_think": True}, "objects", TRAINED_CUBES),
+                                      ("finetuned", {"backend": "mock", "label": "mock fine-tuned (thinks, answers questions)", "answers": True, "enable_thinking": True}, "posv3_think", 27)):
             BACKENDS[side], MODEL_KEY[side], MODEL_FORMAT[side] = llm_backends.make(cfg), model_key(cfg), fmt
             STATUS[side] = dict(state="ready", label=cfg["label"], error=None, max_cubes=cubes)
         return

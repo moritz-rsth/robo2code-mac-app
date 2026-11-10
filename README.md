@@ -36,15 +36,26 @@ These are real programs written by the models, run in the simulator. They are ha
 ![The app after a run](docs/app.png)
 
 - **Models:** each side has a picker with base models, full models and adapters. Selecting one downloads it if needed and frees the side's old model.
-- **Manual code:** the last picker entry runs a pasted `def run(robot):` program, no model needed.
+- **Manual code:** the last picker entry runs a `def run(robot):` program you type into the box under the simulation, where the other sides show the model's output. No model needed.
 - **Scene:** make a random scene with up to 48 cubes, or load a test example. Drag the 3D layout to look around.
 - **Scene generator:** the pencil next to **New random scene** adds towers (2 to 10 high), pyramids (2 to 5 layers), flat squares (2x2 to 4x4), lines and L, T and cross shapes, each at a random free spot, in one colour or mixed. The cube count cannot go below what they need, and any extra cubes are placed as single cubes.
 - **Run:** run the left side, the right side or both, then **Replay** the recording at any speed.
 - **Download video:** under each simulation, once its run has ended. Saves the run as an MP4 (H.264, 30 fps at simulated real time, plays in QuickTime, iMessage and WhatsApp), named after the request, the model and the time. Without ffmpeg it saves a GIF.
 - **Chain prompt:** under each simulation. The end state of that side becomes the new scene and the request box is cleared, so the next request continues from there. A cube still in the gripper is let go.
 - **Result:** a run always plays to the end. The panel shows whether the task was solved and what the stricter dataset checker would have flagged.
-- **Prompt format:** *Auto* picks what the model was trained with, or choose *Objects line*, *Scene_Info JSON* or *Scene_Info + answers* yourself.
+- **Prompt format:** *Auto* picks what the model was trained with, or choose one yourself (see the table below).
+- **Reasoning:** a thinking model (data_posv3) first reasons. A compact **Thinking…** field with a live dot shows that it is at work; click it to read the reasoning as it streams. Once the model closes its reasoning (`</think>`), the field reads **Thought** and its answer (code, refusal or one sentence) follows below it as its own block. Only that answer is run. If the model stops while still reasoning (token limit: 2600 new tokens for thinking models, 2048 otherwise) or writes nothing after its reasoning, the panel says so and nothing runs. Dataset rows of data_posv3 show their two stored reasonings under the request, and their source, family and start state in the row info.
 - **Scene questions:** models with `"answers": true` in `p2r_meta.json` reply to a question about the scene in one sentence. The arm does not move, and dataset rows show correct or wrong. `"max_cubes"` there sets when the page warns about scene size.
+
+Prompt formats, set per model with `"prompt_format"` in `p2r_meta.json`. Without that key the format comes from the older keys, as before: `"answers": true` is `answers_posv1`, `"scene_info": true` is `scene_v5`, neither is `objects`. An explicit `"enable_thinking"` always wins.
+
+| `prompt_format` | Trained on | User message | System prompt | Thinking |
+|---|---|---|---|---|
+| `objects` | data_v0 to data_v4 | `Objects:` line, then the request | `system_prompt.md` | off |
+| `scene_v5` | data_v5, data_posv0 | request, then `Scene_Info:` JSON | Scene_Info prompt | off |
+| `answers_posv1` | data_posv1, data_posv2 | as `scene_v5` | `system_prompt_answers.md` | off |
+| `posv3_think` | data_posv3 with reasoning | as `scene_v5` | `system_prompt_posv3.md` | on |
+| `posv3_nothink` | data_posv3 without reasoning | as `scene_v5` | `system_prompt_posv3.md` without its "Before the code, think briefly" line | off |
 
 **ID** finds any example by id, in any dataset version and split:
 
@@ -79,5 +90,5 @@ The best public model to start with is `Prompt2Robo v3-full-4b, Qwen3-4B · MLX 
 | `models_scan.py`, `llm_backends.py` | Model discovery and MLX/Transformers backends |
 | `sim_worker.py`, `floor_view.py`, `lara_view.py`, `lara_assets.py` | Simulation runs and picture |
 | `recorder.py` | Records each run into a video file (ffmpeg from `imageio-ffmpeg`) |
-| `sim/` | Scene, robot API and checker from the dataset repo |
+| `sim/` | Scene, robot API and checkers from the dataset repo (`check_posv1.py` for data_posv1/2, `check_posv3.py` for data_posv3) |
 | `datasets/`, `examples.jsonl` | Dataset versions for the ID search, held-out examples |

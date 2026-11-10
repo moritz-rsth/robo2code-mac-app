@@ -5,8 +5,11 @@ and every folder in the env var P2R_MODEL_DIRS (colon separated). Recognized fol
   * MLX LoRA adapter   adapter_config.json + adapters.safetensors     (output of the Mac training script)
   * PEFT LoRA adapter  adapter_config.json + adapter_model.safetensors (output of the H100 training script, needs the transformers backend)
   * full model         config.json + *.safetensors                     (merged / converted MLX or HF model)
-An optional p2r_meta.json next to the files may set {"name": "...", "enable_thinking": true|false, "scene_info": true|false, "answers": true|false, "max_cubes": <largest training scene>, "base": "<MLX base of an adapter>"}.
-"answers": true means the model also answers scene questions in one sentence (prompt format "answers", Scene_Info included); max_cubes defaults to 6.
+An optional p2r_meta.json next to the files may set {"name": "...", "prompt_format": "<one of PROMPT_FORMATS>", "enable_thinking": true|false, "scene_info": true|false,
+"answers": true|false, "max_cubes": <largest training scene>, "base": "<MLX base of an adapter>"}.
+"prompt_format" names the format the model was trained with (see PROMPT_FORMATS); without it the format is inferred from the older keys:
+"answers": true -> answers_posv1, "scene_info": true -> scene_v5, neither -> objects. "enable_thinking" given explicitly always wins; otherwise
+prompt_format decides it (posv3_think: on), and without either key the old defaults stay. max_cubes defaults to 6.
 
 With a Hugging Face token the Prompt2Robo repos of the account HF_USER are listed as well (refresh_account); nothing about them is hard-coded,
 so new uploads appear by themselves. Repo kinds by name: *-MLX-4bit and *-full go straight to MLX (kind "hf"); *-MLX-adapter is kind "hf_adapter" (small, runs
@@ -33,6 +36,14 @@ HF_PRESETS = [                                           # repo, name, download 
 PEFT_BASES = {"Qwen/Qwen3-8B": ("Qwen3-8B bf16 (transformers)", 16.4), "Qwen/Qwen3-4B": ("Qwen3-4B bf16 (transformers)", 8.0)}
 GROUPS = ("Base models", "Full models (Prompt2Robo fine-tunes)", "Adapters (small, run on a base model)")
 SKIP = {".git", ".venv", "venv", "node_modules", "__pycache__", ".cache", "Library", "site-packages"}
+# The prompt formats, name -> enable_thinking it implies. The system prompts and user messages are in server.PROMPTS.
+#   objects        data_v0..v4: "Objects: 1 (red), ..." line before the request, system_prompt.md, no thinking
+#   scene_v5       data_v5, data_posv0: request + "\n\nScene_Info:\n" + JSON of the scene, the Scene_Info system prompt, no thinking
+#   answers_posv1  data_posv1, data_posv2: the Scene_Info message, system_prompt_answers.md (also answers scene questions), no thinking
+#   posv3_think    data_posv3 with reasoning: the Scene_Info message, system_prompt_posv3.md, thinking on (<think>...</think> before the reply)
+#   posv3_nothink  data_posv3 trained without reasoning: system_prompt_posv3.md minus its "Before the code, think briefly" line, no thinking
+PROMPT_FORMATS = {"objects": False, "scene_v5": False, "answers_posv1": False, "posv3_think": True, "posv3_nothink": False}
+FORMAT_ALIASES = {"scene": "scene_v5", "answers": "answers_posv1"}     # the names of before, still accepted in p2r_meta.json and from the page
 
 
 def _roots():
@@ -74,14 +85,14 @@ def describe(folder):
         except Exception:
             cfg = {}
         if (folder / "adapters.safetensors").exists():
-            return dict(kind="adapter", path=str(folder), base=adapter_base(meta, cfg), thinking=meta.get("enable_thinking", True),
+            return dict(kind="adapter", path=str(folder), base=adapter_base(meta, cfg), thinking=thinking_of(meta, True),
                         name=meta.get("name") or "LoRA adapter (MLX)")
         if (folder / "adapter_model.safetensors").exists():
             base = Path(str(cfg.get("base_model_name_or_path") or "")).name    # often a path on the training machine: only the name counts
-            return dict(kind="peft", path=str(folder), base=f"Qwen/{base}" if base.startswith("Qwen") else "Qwen/Qwen3-8B", thinking=meta.get("enable_thinking", False),
+            return dict(kind="peft", path=str(folder), base=f"Qwen/{base}" if base.startswith("Qwen") else "Qwen/Qwen3-8B", thinking=thinking_of(meta, False),
                         name=meta.get("name") or "LoRA adapter (PEFT, slower)")
     if (folder / "config.json").exists() and list(folder.glob("*.safetensors")):
-        return dict(kind="model", path=str(folder), base=None, thinking=meta.get("enable_thinking", False),
+        return dict(kind="model", path=str(folder), base=None, thinking=thinking_of(meta, False),
                     name=meta.get("name") or "Full model")
     return None
 
@@ -307,9 +318,26 @@ def read_meta(info, token=None):
         return {}
 
 
+def format_name(name):
+    """A format name from p2r_meta.json or the page -> a key of PROMPT_FORMATS, or None. The old names "scene" and "answers" still work."""
+    name = FORMAT_ALIASES.get(name, name)
+    return name if isinstance(name, str) and name in PROMPT_FORMATS else None
+
+
 def prompt_format(meta):
-    """What the model was trained with: "answers", "scene" or "objects", a key of server.PROMPTS."""
-    return "answers" if meta.get("answers") else "scene" if meta.get("scene_info") else "objects"
+    """What the model was trained with, a key of PROMPT_FORMATS: "prompt_format" if it names one, else inferred from the older keys as before."""
+    fmt = format_name(meta.get("prompt_format"))
+    if meta.get("prompt_format") is not None and fmt is None:
+        print(f"p2r_meta.json: unknown prompt_format {meta['prompt_format']!r} (known: {', '.join(PROMPT_FORMATS)}), inferring it from the other keys", flush=True)
+    return fmt or ("answers_posv1" if meta.get("answers") else "scene_v5" if meta.get("scene_info") else "objects")
+
+
+def thinking_of(meta, default):
+    """enable_thinking for the chat template: the explicit key, else what "prompt_format" implies, else default (the behaviour of before)."""
+    if "enable_thinking" in meta:
+        return meta["enable_thinking"]
+    fmt = format_name(meta.get("prompt_format"))
+    return PROMPT_FORMATS[fmt] if fmt else default
 
 
 def max_cubes(meta, default):

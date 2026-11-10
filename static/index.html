@@ -71,6 +71,21 @@ dialog::backdrop { background: rgba(22,23,26,.25); }
 .sent summary { cursor: pointer; }
 .sent pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; color: var(--ink); }
 .sent mark { background: var(--link-bg); color: var(--link); border-radius: 4px; }
+.reason { margin: 10px 0 0; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); font-size: 12.5px; }
+.reason[hidden] { display: none; }
+.reason summary { cursor: pointer; padding: 6px 12px; color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 8px; list-style: none; user-select: none; }
+.reason summary::-webkit-details-marker { display: none; }
+.reason summary::after { content: "▸"; margin-left: auto; font-size: 11px; transition: transform .15s; } .reason[open] summary::after { transform: rotate(90deg); }
+.reason summary b { color: var(--ink); font-weight: 500; }
+.reason .live { width: 8px; height: 8px; border-radius: 50%; background: var(--link); flex: none; animation: pulse 1s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .25; transform: scale(.7); } }
+@media (prefers-reduced-motion: reduce) { .reason .live { animation: none; } }
+.reason pre { margin: 0; border: 0; border-top: 1px solid var(--line); border-radius: 0 0 12px 12px; min-height: 0; font-family: var(--font); font-size: 13px; color: var(--ink); }
+.reason.cut { border-color: #f0dcae; } .reason.cut summary, .reason.cut summary b { color: #845a05; }
+.manualbox { margin: 10px 0 0; } .manualbox[hidden] { display: none; }
+.manualbox textarea { font-family: var(--mono); font-size: 12px; line-height: 1.5; min-height: 180px; }
+#rowreason { margin-top: 8px; } #rowreason pre { min-height: 0; max-height: 200px; font-family: var(--font); font-size: 13px; }
+#rowreason pre + pre { margin-top: 6px; }
 details.settings { margin-bottom: 14px; } details.settings summary { cursor: pointer; font-weight: 500; }
 details.settings .row input { font: inherit; font-size: 13px; border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; min-width: 320px; background: var(--bg); }
 .hintline { color: var(--muted); font-size: 12.5px; margin-top: 6px; }
@@ -141,6 +156,7 @@ details.settings .row input { font: inherit; font-size: 13px; border: 1px solid 
         <button id="run-base">Run left</button><button id="run-finetuned">Run right</button><button class="primary" id="run">Run both</button>
       </div>
       <div class="row" style="margin-top:6px"><span id="hint" style="color:var(--muted);font-size:13px"></span><span class="cap" id="cubenote"></span></div>
+      <details class="sent" id="rowreason" hidden><summary>Stored reasoning of this row</summary><div id="rowreasons"></div></details>
     </div>
     <div class="scene">
       <div class="scenehead"><span class="lab" id="maplab">Scene layout</span><span class="toggle"><button id="v2d">2D</button><button id="v3d">3D</button></span></div>
@@ -168,17 +184,18 @@ let scene = null, exampleId = null, exampleDataset = null, es = null;
 
 function sideHTML(id, label) {
   return `<h2><span id="l-${id}">${label}</span><span class="st" id="st-${id}">idle</span></h2>
-    <div class="picker"><select class="model" id="sel-${id}"></select><button id="rs-${id}" title="rescan folders and the Hugging Face account">↻</button><select id="pf-${id}" title="what the model gets besides the request. Auto = the format this model was trained with"><option value="auto">prompt: auto</option><option value="objects">prompt: Objects line</option><option value="scene">prompt: Scene_Info JSON</option><option value="answers">prompt: Scene_Info + answers</option></select></div>
+    <div class="picker"><select class="model" id="sel-${id}"></select><button id="rs-${id}" title="rescan folders and the Hugging Face account">↻</button><select id="pf-${id}" title="what the model gets besides the request. Auto = the format this model was trained with"><option value="auto">prompt: auto</option><option value="objects">prompt: Objects line</option><option value="scene_v5">prompt: Scene_Info JSON</option><option value="answers_posv1">prompt: Scene_Info + answers</option><option value="posv3_think">prompt: posv3, thinking</option><option value="posv3_nothink">prompt: posv3, no thinking</option></select></div>
     <div class="picker basebar" id="bb-${id}" hidden><span id="bt-${id}"></span><select id="ba-${id}" title="the MLX base this adapter runs on. The adapter's own base is the one it was made for" hidden></select></div>
     <div class="picker" id="cu-${id}" hidden><input id="in-${id}" placeholder="folder path or Hugging Face link"><select id="tp-${id}" title="chat template"><option value="auto">template: auto</option><option value="nothinking">non-thinking</option><option value="thinking">thinking</option></select><button id="ld-${id}">Load</button></div>
-    <div class="picker" id="mw-${id}" hidden><textarea id="mc-${id}" rows="9" spellcheck="false" aria-label="Manual code" placeholder="def run(robot):\n    p = robot.get_object_position('1')\n    ..."></textarea></div>
     <details class="sent" id="pd-${id}"><summary>Prompt sent to the model</summary><pre id="pu-${id}">nothing sent yet</pre>
       <details><summary>System prompt</summary><pre id="ps-${id}"></pre></details></details>
     <div class="screen"><img id="img-${id}" alt=""><div class="ph" id="ph-${id}">waiting for a run</div><span class="tm" id="tm-${id}" hidden></span></div>
     <div class="under"><button id="rp-${id}" disabled title="no recorded frames yet">Replay</button><button id="chain-${id}" disabled title="run this side first">Chain prompt</button><button id="dl-${id}" disabled title="run this side first">Download video</button><span class="cap">Floor grid: 1 cell = 10 cm, bold lines every 1 m</span></div>
     <div class="chips" id="ch-${id}"></div><div class="errs" id="er-${id}"></div>
+    <details class="reason" id="rz-${id}" hidden><summary id="rzs-${id}"></summary><pre id="rzt-${id}"></pre></details>
     <div class="msg" id="ms-${id}"></div>
-    <pre id="code-${id}"></pre>`;
+    <pre id="code-${id}"></pre>
+    <div class="manualbox" id="mw-${id}" hidden><label class="lab" for="mc-${id}">Your code</label><textarea id="mc-${id}" rows="9" spellcheck="false" placeholder="def run(robot):\n    p = robot.get_object_position('1')\n    ..."></textarea></div>`;
 }
 
 // ---- scene layout: 2D top view or a 3D view to orbit. World: x 0..0.8 (front), y -0.4..0.4 (+y = left), z up; the robot base is the origin.
@@ -328,7 +345,7 @@ async function newScene() {
   if (!r.scene) { $("#hint").textContent = r.error + " The scene stays as it was."; sceneCubes = 0; return; }
   const placed = Object.keys(r.scene.objects).length, made = r.groups ? r.groups.map((g) => g.label) : [];
   if (r.spare && r.spare.length) made.push(`${r.spare.length} single cube${r.spare.length > 1 ? "s" : ""}`);
-  scene = r.scene; exampleId = exampleDataset = null; drawMap();
+  scene = r.scene; exampleId = exampleDataset = null; drawMap(); rowReasoning([]);
   $("#hint").textContent = [placed < n ? `Only ${placed} cubes fit on the table, so this scene has ${placed}.` : "", made.length ? `Generator: ${made.join(", ")}.` : ""].filter(Boolean).join(" ");
 }
 
@@ -439,16 +456,26 @@ async function init() {
 }
 
 function loadExample(e) {
-  $("#instr").value = e.instruction; scene = e.scene; exampleId = e.id; exampleDataset = e.dataset || null; sceneCubes = 0; drawMap();
+  $("#instr").value = e.instruction; scene = e.scene; exampleId = e.id; exampleDataset = e.dataset || null; sceneCubes = 0; drawMap(); rowReasoning([]);
   const kind = e.split === "train" ? "training example" : e.split === "" ? "example" : "held-out test example";
-  $("#hint").textContent = `${kind} (${[e.dataset, e.split, e.subcategory].filter(Boolean).join(", ")}): success is checked automatically`;
+  const from = [e.source && `source ${e.source}`, e.family && `family ${e.family}`, e.start_state && `start ${e.start_state}`].filter(Boolean).join(", ");     // data_posv3 provenance
+  $("#hint").textContent = `${kind} (${[e.dataset, e.split, e.subcategory].filter(Boolean).join(", ")})${from ? ` · ${from}` : ""}: success is checked automatically`;
+}
+// data_posv3 train rows store two reasonings for their answer; they are shown under the request, collapsed. Any other scene hides them.
+function rowReasoning(texts) {
+  const box = $("#rowreason");
+  $("#rowreasons").replaceChildren(...texts.map((t, i) => { const p = document.createElement("pre"); p.textContent = `${i + 1}. ${t}`; return p; }));
+  box.hidden = !texts.length; if (!texts.length) box.open = false;
+  $("summary", box).textContent = `Stored reasoning of this row (${texts.length} text${texts.length === 1 ? "" : "s"})`;
 }
 // The ID button: find an example by id. A side in Manual code mode also gets the example's reference answer, if it is a program.
 async function pickExample(e) {
   $("#iddlg").close(); loadExample(e);
   const manual = SIDES.filter(isManual);
-  if (!manual.length) return;
+  if (!manual.length && !e.reasoning) return;
   const a = await (await fetch("/api/answer/" + encodeURIComponent(e.id) + (e.dataset ? "?dataset=" + e.dataset : ""))).json();
+  if (exampleId === e.id) rowReasoning(a.reasoning || []);           // unless another scene came meanwhile
+  if (!manual.length) return;
   if (a.program) for (const s of manual) $(`#mc-${s}`).value = a.answer;
   else $("#hint").textContent += ` · this sample's answer is ${a.expected === "answer" ? "a sentence" : "a refusal"}, so the code box stays as it was`;
 }
@@ -596,7 +623,18 @@ function showSent(side, e) {
   else { add(e.user.slice(0, i), true); add(e.request, false); add(e.user.slice(i + e.request.length), true); }
   $(`#ps-${side}`).textContent = e.system;
 }
+// The thinking field of a reasoning model: a compact line with a live dot while it reasons, a click shows the whole reasoning.
+// Once the answer starts the field folds up and the answer (code, refusal or sentence) follows below it as its own block.
+function reasonBox(side, words, state) {
+  const box = $(`#rz-${side}`), sum = $(`#rzs-${side}`); box.hidden = false; box.classList.toggle("cut", state === "cut" || state === "empty");
+  sum.replaceChildren();
+  if (state === "live") { const dot = document.createElement("span"); dot.className = "live"; dot.setAttribute("aria-hidden", "true"); sum.append(dot); }
+  const b = document.createElement("b");
+  b.textContent = { live: "Thinking…", done: "Thought", cut: "Stopped while still reasoning", empty: "Reasoned, but wrote no answer" }[state]; sum.append(b);
+  if (words) sum.append(`${words} words`);
+}
 function reset(side) {
+  $(`#rz-${side}`).hidden = true; $(`#rz-${side}`).open = false; $(`#rzt-${side}`).textContent = ""; delete $(`#rz-${side}`).dataset.coding; $(`#code-${side}`).hidden = isManual(side);
   $(`#code-${side}`).textContent = ""; $(`#ch-${side}`).innerHTML = ""; $(`#er-${side}`).textContent = ""; $(`#ms-${side}`).style.display = "none"; $(`#ms-${side}`).classList.remove("answer");
   $(`#img-${side}`).style.display = "none"; $(`#ph-${side}`).style.display = "grid"; $(`#ph-${side}`).textContent = "waiting for the model"; $(`#tm-${side}`).hidden = true;
 }
@@ -666,7 +704,7 @@ function runButtons() {
 // Chain prompt: the end state of one side becomes the scene of the next request. It is a free scene now, so nothing is checked against a dataset row.
 function chainPrompt(s) {
   const { scene: next, dropped } = chain[s];
-  scene = next; exampleId = exampleDataset = null; sceneCubes = 0; drawMap();
+  scene = next; exampleId = exampleDataset = null; sceneCubes = 0; drawMap(); rowReasoning([]);
   $("#instr").value = ""; $("#instr").focus();
   const from = s === "base" ? "left" : "right", held = dropped.length ? ` Cube ${dropped.join(", ")} was in the gripper and has been let go.` : "";
   $("#hint").textContent = `Chained: this scene is where the ${from} side ended.${held} Type the next request.`;
@@ -701,11 +739,17 @@ function run(sides = SIDES) {
     es.onmessage = (m) => {
       const e = JSON.parse(m.data), s = e.side;
       if (e.type === "status") { $(`#st-${s}`).textContent = e.text; $(`#ph-${s}`).textContent = e.text; }
-      else if (e.type === "token") { const p = $(`#code-${s}`); p.textContent += e.text; p.scrollTop = p.scrollHeight; }
+      else if (e.type === "think") { const box = $(`#rz-${s}`), t = $(`#rzt-${s}`); if (box.hidden) reasonBox(s, 0, "live"); t.textContent += e.text; t.scrollTop = t.scrollHeight; }
+      else if (e.type === "token") {
+        const box = $(`#rz-${s}`);
+        if (!box.hidden && !box.dataset.coding) { box.dataset.coding = "1"; box.open = false; reasonBox(s, $(`#rzt-${s}`).textContent.trim().split(/\s+/).length, "done"); }
+        const p = $(`#code-${s}`); p.textContent += e.text; p.scrollTop = p.scrollHeight; }
+      else if (e.type === "thought") reasonBox(s, e.words, !e.closed ? "cut" : e.empty ? "empty" : "done");
+      else if (e.type === "unthought") { $(`#rz-${s}`).hidden = true; $(`#rzt-${s}`).textContent = ""; $(`#code-${s}`).textContent = e.text; }     // thinking on, but no tag came: it was the answer
       else if (e.type === "code") { if (e.notes && e.notes.length) { $(`#code-${s}`).textContent = e.code; tag(s, "parser fixed: " + e.notes.join(", "), "warn"); } }
       else if (e.type === "format" && e.manual) { tag(s, "manual code, no model"); $(`#pu-${s}`).textContent = "No model was used: this side ran the code in its box."; $(`#ps-${s}`).textContent = ""; }
-      else if (e.type === "format") { tag(s, `prompt: ${e.text}${e.auto ? " (auto)" : ""}`); showSent(s, e); }
-      else if (e.type === "generated") tag(s, `wrote ${e.answered ? "an answer" : "code"} in ${e.seconds} s`);
+      else if (e.type === "format") { tag(s, `prompt: ${e.text}${e.auto ? " (auto)" : ""}`); if (e.thinking) tag(s, "thinking on"); showSent(s, e); }
+      else if (e.type === "generated") tag(s, e.stopped ? `stopped after ${e.seconds} s` : `wrote ${e.answered ? "an answer" : "code"} in ${e.seconds} s`);
       else if (e.type === "flag") tag(s, `dataset checker would stop here (sim ${e.sim_s} s): ${e.msg}`, "warn");
       else if (e.type === "frame") { record(s, e); showFrame(s, e, false); }
       else if (e.type === "video") videoButton(s, e);
@@ -716,6 +760,10 @@ function run(sides = SIDES) {
           if (e.reasons && e.reasons.length) $(`#er-${s}`).textContent = "checker: " + e.reasons.join(" · ");
           $(`#ph-${s}`).textContent = "answered, the arm does not move"; }
         else if (e.kind === "text") { const ms = $(`#ms-${s}`); ms.style.display = "block"; ms.textContent = e.answer; tag(s, "answered in text, no code", "warn"); if (e.success === true) tag(s, "correct (refusal as expected)", "ok"); else if (e.success === false) tag(s, "not correct", "bad"); $(`#ph-${s}`).textContent = "no code, so nothing to simulate"; }
+        else if (e.unfinished) { const ms = $(`#ms-${s}`), cut = e.unfinished === "reasoning"; ms.style.display = "block";
+          ms.textContent = cut ? "The model stopped while still reasoning: it reached its token limit before </think>, so it wrote no code, answer or refusal and nothing was run. Open the thinking field above to read how far it got."
+                               : "The model ended its reasoning but wrote no answer after it: no code, answer or refusal, so nothing was run.";
+          tag(s, cut ? "stopped while still reasoning" : "no answer after the reasoning", "bad"); $(`#ph-${s}`).textContent = "no code, so nothing to simulate"; }
         else if (!e.executed) tag(s, "failed: " + (e.error || "not executed"), "bad");
         else { if (e.success === true) tag(s, "task solved", "ok"); else if (e.success === false) tag(s, "task not solved", "bad"); else tag(s, "ran without error", "ok");
           tag(s, `${e.calls} robot calls`); tag(s, `${e.sim_seconds} s simulated`);

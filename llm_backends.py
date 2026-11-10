@@ -2,7 +2,8 @@
 Configured in models.json:  {"base": {"backend": "mlx|transformers|http|mock", ...}, "finetuned": {...}}
 
 Common options: "label" (shown in the UI), "enable_thinking" (Qwen3 chat-template switch, default false).
-Qwen3 may start its answer with an empty <think></think> block; it is removed from the stream here.
+Qwen3 may start its answer with an empty <think></think> block; it is removed from the stream here. A <think> block with reasoning in it
+(a thinking model) stays in the stream: the server shows it in the Reasoning box and runs only what follows </think>.
 Backends that hold weights also have close(); release_memory() hands freed memory back to the system.
 All MLX work runs on one thread, see MLXThread."""
 import gc
@@ -17,6 +18,11 @@ from concurrent.futures import Future
 from pathlib import Path
 
 MAX_NEW_TOKENS = 2048          # data_posv1 allows answers of 3000 characters, about 1100 tokens of code and more with many numbers; 900 would cut them off
+THINK_MAX_NEW_TOKENS = 2600    # thinking on: the reasoning (data_posv3: 30 to 240 words) comes on top of the code
+
+
+def max_tokens(thinking):
+    return THINK_MAX_NEW_TOKENS if thinking else MAX_NEW_TOKENS
 
 
 class MLXThread:
@@ -131,7 +137,8 @@ def memory_hint(what, other=None):
 
 
 def strip_think(pieces):
-    """Drop a leading <think>...</think> block from a stream of text pieces."""
+    """Drop a leading EMPTY <think></think> block (only whitespace inside) from a stream of text pieces. A block with reasoning in it is passed on
+    as it comes, piece by piece, so the page can show the reasoning live."""
     buf, started = "", False
     for piece in pieces:
         if started:
@@ -142,11 +149,15 @@ def strip_think(pieces):
         if not s:
             continue
         if s.startswith("<think>"):
-            if "</think>" in s:
+            inner = s[len("<think>"):]
+            if "</think>" in inner and not inner.split("</think>", 1)[0].strip():
                 started = True
-                rest = s.split("</think>", 1)[1].lstrip("\n")
+                rest = inner.split("</think>", 1)[1].lstrip("\n")
                 if rest:
                     yield rest
+            elif inner.strip() and not "</think>".startswith(inner.strip()):      # reasoning has begun: not an empty block
+                started = True
+                yield buf
         elif "<think>".startswith(s):
             continue
         else:
@@ -158,11 +169,16 @@ def strip_think(pieces):
 
 class MockBackend:
     """No model: writes a plausible program for the first two cubes, token by token (for testing the app).
-    With answers=True it replies to a request ending in "?" with a sentence, as a model trained on scene questions would."""
-    def __init__(self, label="mock", broken=False, drop_def=False, answers=False, **_):
-        self.label, self.broken, self.drop_def, self.answers = label, broken, drop_def, answers
+    With answers=True it replies to a request ending in "?" with a sentence, as a model trained on scene questions would.
+    With enable_thinking=True it first reasons in a <think> block, as a data_posv3 model does; a request with "ramble" in it never closes that block
+    (a thinking model that hits the token limit), "say nothing" writes nothing after it, "no opening tag" leaves out <think>, "no tags" writes no block. empty_think=True starts the reply with an empty <think></think> block, as non-thinking Qwen3 can."""
+    def __init__(self, label="mock", broken=False, drop_def=False, answers=False, enable_thinking=False, empty_think=False, **_):
+        self.label, self.broken, self.drop_def, self.answers, self.thinking, self.empty_think = label, broken, drop_def, answers, enable_thinking, empty_think
 
-    def stream(self, messages, max_new_tokens=MAX_NEW_TOKENS):
+    def stream(self, messages, max_new_tokens=None):
+        yield from strip_think(self._pieces(messages))
+
+    def _pieces(self, messages):
         user = messages[-1]["content"]
         request, _, info = user.partition("\n\nScene_Info:\n")
         if "poem" in user.lower() or "weather" in user.lower():
@@ -179,6 +195,24 @@ class MockBackend:
                     f"    robot.move_to(b[0], b[1], {z})\n    robot.open_gripper()\n    robot.move_to(b[0], b[1], 0.20)")
         if self.drop_def:
             text = text.replace("def run(robot):", "run(robot):", 1)          # imitates the slip of the small fine-tuned model
+        if self.thinking:
+            scene = json.loads(info)["scene"]["objects"] if info else {}
+            seen = ", ".join(f"cube {i} ({o['color']})" for i, o in list(scene.items())[:4]) or "the cubes of the Objects line"
+            thought = (f"The scene shows {seen}. The goal is what the request asks for: {request.strip()[:80]}. "
+                       "I pick the first cube from above with the fingers along y, carry it at a safe height and set it down on the second one.")
+            low = request.lower()
+            if "ramble" in low:
+                text = "<think>\n" + " ".join([thought] * 6)                  # never closed: the token limit came first
+            elif "say nothing" in low:
+                text = f"<think>\n{thought}\n</think>\n\n"                  # reasoning, then no answer at all
+            elif "no opening tag" in low:
+                text = f"{thought}\n</think>\n\n{text}"                      # a template that put <think> into the prompt
+            elif "no tags" in low:
+                pass                                                          # thinking on, but straight to the code
+            else:
+                text = f"<think>\n{thought}\n</think>\n\n{text}"
+        elif self.empty_think:
+            text = "<think>\n\n</think>\n\n" + text
         for i in range(0, len(text), 6):
             time.sleep(0.03)
             yield text[i:i + 6]
@@ -215,11 +249,11 @@ class MLXBackend:
 
         MLX.run(load_model)
 
-    def stream(self, messages, max_new_tokens=MAX_NEW_TOKENS):
+    def stream(self, messages, max_new_tokens=None):
         def pieces():
             from mlx_lm import stream_generate
             prompt = self.tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, enable_thinking=self.thinking)
-            for r in stream_generate(self.model, self.tok, prompt=prompt, max_tokens=max_new_tokens):
+            for r in stream_generate(self.model, self.tok, prompt=prompt, max_tokens=max_new_tokens or max_tokens(self.thinking)):
                 yield r.text
 
         yield from strip_think(MLX.stream(pieces))
@@ -278,7 +312,7 @@ class TransformersBackend:
         self.dev = dev
         print(f"transformers: {path} on {dev}, {next(self.model.parameters()).dtype}", flush=True)
 
-    def stream(self, messages, max_new_tokens=MAX_NEW_TOKENS):
+    def stream(self, messages, max_new_tokens=None):
         import torch
         from transformers import TextIteratorStreamer
         text = self.tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, enable_thinking=self.thinking)
@@ -289,7 +323,7 @@ class TransformersBackend:
         def generate():
             try:
                 with torch.no_grad():                                   # per thread, so it has to be set here
-                    self.model.generate(**ids, max_new_tokens=max_new_tokens, do_sample=False, streamer=streamer)
+                    self.model.generate(**ids, max_new_tokens=max_new_tokens or max_tokens(self.thinking), do_sample=False, streamer=streamer)
             except Exception as e:                                      # only the text: a traceback would keep the KV cache alive
                 failed.append(f"{type(e).__name__}: {e}")
                 streamer.end()                                          # or the reader below would wait forever
