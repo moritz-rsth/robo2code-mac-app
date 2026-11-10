@@ -774,7 +774,7 @@ function setupExport() {
     const tick = async () => {
       const st = await (await fetch(`/api/export/${r.job}`)).json();
       if (st.error) exporting[s] = { error: true, text: st.error };
-      else if (st.ready) { exporting[s] = { done: true, progress: 1, text: `saved ${st.name}` }; saveFile(`/api/export/${r.job}/file`, st.name); }
+      else if (st.ready) { exporting[s] = { done: true, progress: 1, text: `saved ${st.name}` }; saveFile(`/api/export/${r.job}/file`, st.name); if (exportSide === s) $("#exdlg").close(); }
       else { exporting[s] = { busy: true, progress: st.progress, text: st.state === "waiting" ? "waiting for the other export" : `rendering… ${Math.round(st.progress * 100)} %` }; setTimeout(tick, 600); }
       exportState(s);
     };

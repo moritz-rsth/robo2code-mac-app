@@ -4,8 +4,9 @@ job = {"ffmpeg", "video" (the 640x360 recording of recorder.py), "frames" (its f
        "reasoning", "answer", "pace" (reasoning words per second), "speed" (simulation speed)}
 
 The sequence, each part only if its text is there: prompt card (the request typed into a bubble over the blurred first frame of the scene),
-hand-off (the bubble flies into a model card, which moves up to become the header), thinking (cycling words, the reasoning streams in),
-answer (highlighted Python, or plain text), a pause to read, then the simulation at the chosen speed with its end-state hold.
+hand-off (the bubble flies into a model card, which slides out at the top; the model's name stays as a footnote), thinking (cycling words, the reasoning streams in),
+answer (highlighted Python, or plain text), then straight into the simulation at the chosen speed with its end-state hold. The intro starts with the
+sharp input scene for 1.5 s before it blurs and dims.
 Every frame is drawn with Pillow and piped into one ffmpeg (H.264, yuv420p, TV range); the recording is decoded and scaled by a second ffmpeg,
 one frame at a time: memory stays flat however long the run or the reasoning is."""
 import bisect
@@ -30,7 +31,7 @@ WORDS = ["Baking", "Marinating", "Simmering", "Kneading", "Caramelizing", "Zesti
 CODE_COLORS = [(Token.Comment, (128, 134, 145)), (Token.Keyword, (199, 146, 234)), (Token.Name.Function, (130, 170, 255)), (Token.Name.Builtin, (255, 203, 107)),
                (Token.Literal.String, (195, 232, 141)), (Token.Literal.Number, (247, 140, 108)), (Token.Operator, (137, 221, 255))]
 METHOD = (130, 170, 255)                                            # robot.move_to: a name after a dot
-HEAD_Y, PANEL_TOP, PANEL_BOTTOM = 40, 252, 1036
+PANEL_TOP, PANEL_BOTTOM = 64, 1000
 
 
 def font(name, size):
@@ -151,7 +152,13 @@ def paste(frame, sprite, cx, cy, scale=1.0, alpha=1.0):
     if alpha < 1.0:
         sprite = sprite.copy()
         sprite.putalpha(sprite.getchannel("A").point(lambda a: int(a * alpha)))
-    frame.alpha_composite(sprite, (int(cx - sprite.width / 2), int(cy - sprite.height / 2)))
+    x, y = int(cx - sprite.width / 2), int(cy - sprite.height / 2)
+    if -x >= sprite.width or -y >= sprite.height:                           # wholly above or left of the frame
+        return
+    if x < 0 or y < 0:                                                      # partly
+        sprite = sprite.crop((max(0, -x), max(0, -y), sprite.width, sprite.height))
+        x, y = max(0, x), max(0, y)
+    frame.alpha_composite(sprite, (x, y))
 
 
 class Intro:
@@ -162,11 +169,12 @@ class Intro:
         self.answer = answer if self.model else ""
         pace = min(max(float(job.get("pace") or 25), 5), 200)
         self.cps_reason, self.cps_code, self.cps_prompt = pace * 6.0, pace * 9.0, max(pace * 2.2, 30)
-        bg = first.resize((W, H), Image.BICUBIC).filter(ImageFilter.GaussianBlur(18)).convert("RGBA")
+        self.sharp = first.resize((W, H), Image.BICUBIC).convert("RGBA")
+        bg = self.sharp.filter(ImageFilter.GaussianBlur(18))
         self.bg = Image.alpha_composite(bg, Image.new("RGBA", (W, H), BG + (165,)))
         self.f_label, self.f_bubble = font("GeistMono-Regular.ttf", 22), font("Geist-Regular.ttf", 50)
         self.f_name, self.f_small, self.f_head = font("Geist-SemiBold.ttf", 44), font("Geist-Regular.ttf", 28), font("Geist-SemiBold.ttf", 30)
-        self.f_reason, self.f_code = font("Geist-Regular.ttf", 33), font("GeistMono-Regular.ttf", 26)
+        self.f_reason, self.f_code, self.f_foot = font("Geist-Regular.ttf", 33), font("GeistMono-Regular.ttf", 26), font("Geist-Regular.ttf", 24)
         self.segments = []
         if self.prompt:
             self._bubble()
@@ -203,14 +211,12 @@ class Intro:
         self.glow = glow.filter(ImageFilter.GaussianBlur(16))
 
     def _stage(self):
-        """Background, header card, request line and the empty panels: everything that does not move while the texts stream."""
+        """Background, the empty panels and the model's name as a footnote: everything that does not move while the texts stream."""
         st = self.bg.copy()
-        paste(st, self.card, W / 2, HEAD_Y + self.card.height / 2)
-        if self.prompt:
-            line = f"“{self.prompt}”"
-            while self.f_small.getlength(line) > 1600:
-                line = line[:-3] + "…”" if line.endswith("…”") else line[:-2] + "…”"
-            ImageDraw.Draw(st).text((W / 2, HEAD_Y + self.card.height + 20), line, font=self.f_small, fill=(205, 207, 212), anchor="ma")
+        name = self.model
+        while self.f_foot.getlength(name) > 1200 and len(name) > 4:
+            name = name[:-2].rstrip() + "…" if name.endswith("…") else name[:-1]
+        ImageDraw.Draw(st, "RGBA").text((1840, PANEL_BOTTOM + 44), name, font=self.f_foot, fill=(225, 227, 231, 120), anchor="rm")
         if self.reasoning:
             self.panels = {"reason": (80, 870), "answer": (910, 1840)}
         else:
@@ -230,6 +236,8 @@ class Intro:
     # ---- timeline: a list of (frames, draw(i) -> RGBA frame)
     def _plan(self):
         sec = lambda s: max(1, int(round(s * FPS)))
+        self.segments.append((sec(1.5), lambda i: self.sharp.copy()))           # the input scene as it is, then it blurs and dims
+        self.segments.append((sec(0.5), lambda i, n=sec(0.5): Image.blend(self.sharp, self.bg, ease((i + 1) / n))))
         if self.prompt:
             n_type = sec(self.p_typed.total / self.cps_prompt)
             self.segments.append((sec(0.35), lambda i, n=sec(0.35): self.prompt_frame(0, ease(i / n))))
@@ -246,8 +254,6 @@ class Intro:
             self.segments.append((sec(0.35), lambda i: self.text_frame(r=self.r_typed.total, a=0)))
         n_a = sec(self.a_typed.total / self.cps_code)
         self.segments.append((n_a, lambda i, n=n_a: self.text_frame(r=self.reasoning and self.r_typed.total, a=self.a_typed.total * (i + 1) / n)))
-        words = len(self.reasoning.split()) + len(self.answer.split())
-        self.segments.append((sec(min(2.5 + words / 120, 7)), lambda i: self.text_frame(r=self.reasoning and self.r_typed.total, a=self.a_typed.total, hold=True)))
 
     def frames(self):
         return sum(n for n, _ in self.segments)
@@ -270,12 +276,12 @@ class Intro:
 
     def handoff_frame(self, t):
         fr = self.bg.copy()
-        head_cy = HEAD_Y + self.card.height / 2
-        if self.prompt:                                                     # the bubble flies into the card, which then moves up
+        head_cy = -self.card.height                                         # the card leaves the frame at the top
+        if self.prompt:                                                     # the bubble flies into the card, which then slides out
             bx, by = self.b_pos
             bcx, bcy = bx + self.b_size[0] / 2, by + self.b_size[1] / 2
             card_cy0 = 780
-            k_in, k_fly, k_up, k_pulse = ease(t / 0.45), ease((t - 0.3) / 0.6), ease((t - 1.2) / 0.5), (t - 0.85) / 0.4
+            k_in, k_fly, k_up, k_pulse = ease(t / 0.45), ease((t - 0.3) / 0.6), ease((t - 1.2) / 0.45) ** 1.5, (t - 0.85) / 0.4
             cy = card_cy0 + 260 * (1 - k_in) + (head_cy - card_cy0) * k_up
             if 0 <= k_pulse <= 1:
                 paste(fr, self.glow, W / 2, cy, alpha=math.sin(math.pi * k_pulse))
@@ -284,13 +290,13 @@ class Intro:
                 paste(fr, self.bubble_full, bcx, bcy + (card_cy0 - bcy) * k_fly, scale=1 - 0.85 * k_fly, alpha=1 - k_fly ** 3)
             fade = ease((t - 1.45) / 0.45)
         else:
-            k_in, k_pulse, k_up = ease(t / 0.35), (t - 0.3) / 0.4, ease((t - 0.7) / 0.45)
+            k_in, k_pulse, k_up = ease(t / 0.35), (t - 0.3) / 0.4, ease((t - 0.7) / 0.45) ** 1.5
             cy = 520 + (head_cy - 520) * k_up
             if 0 <= k_pulse <= 1:
                 paste(fr, self.glow, W / 2, cy, alpha=math.sin(math.pi * k_pulse))
             paste(fr, self.card, W / 2, cy, scale=0.94 + 0.06 * k_in, alpha=k_in)
             fade = ease((t - 0.95) / 0.45)
-        if fade > 0:                                                        # the stage (panels, header) fades in
+        if fade > 0:                                                        # the panels fade in
             fr = Image.blend(fr, self.text_frame(r=0, a=None, static=True), fade)
         return fr
 
@@ -325,7 +331,7 @@ class Intro:
         fr.alpha_composite(base, (x, y))
         fr.alpha_composite(hi, (x, y))
 
-    def text_frame(self, r=0, a=None, think_t=None, hold=False, static=False):
+    def text_frame(self, r=0, a=None, think_t=None, static=False):
         fr = self.stage.copy()
         view_top, view_h = PANEL_TOP + 118, PANEL_BOTTOM - PANEL_TOP - 150
         if self.reasoning:
