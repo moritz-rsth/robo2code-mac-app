@@ -1,7 +1,7 @@
 """Turns the recorded run of one side into a shareable 1920x1080 MP4 for the Export video overlay. Runs as its own process (niced), so an export never
 slows the live app; progress goes to stdout as JSON lines.     usage: python exporter.py <job.json>
 job = {"ffmpeg", "video" (the 640x360 recording of recorder.py), "frames" (its frame count), "out", "prompt" (request or ""), "model" (label or ""),
-       "reasoning", "answer", "pace" (reasoning words per second), "speed" (simulation speed)}
+       "reasoning", "answer", "pace" (reasoning words per second), "code_pace" (code, same unit; default 2x pace), "speed" (simulation speed)}
 
 The sequence, each part only if its text is there: prompt card (the request typed into a bubble over the blurred first frame of the scene),
 hand-off (the bubble flies into a model card, which slides out at the top; the model's name stays as a footnote), thinking (cycling words, the reasoning streams in),
@@ -168,7 +168,8 @@ class Intro:
         answer = re.sub(r"^\s*```\w*\s*$", "", (job.get("answer") or "").replace("<|im_end|>", ""), flags=re.M).strip("\n")
         self.answer = answer if self.model else ""
         pace = min(max(float(job.get("pace") or 25), 5), 200)
-        self.cps_reason, self.cps_code, self.cps_prompt = pace * 6.0, pace * 9.0, max(pace * 2.2, 30)
+        code_pace = min(max(float(job.get("code_pace") or 2 * pace), 5), 400)
+        self.cps_reason, self.cps_code, self.cps_prompt = pace * 6.0, code_pace * 9.0, max(pace * 2.2, 30)
         self.sharp = first.resize((W, H), Image.BICUBIC).convert("RGBA")
         bg = self.sharp.filter(ImageFilter.GaussianBlur(18))
         self.bg = Image.alpha_composite(bg, Image.new("RGBA", (W, H), BG + (165,)))

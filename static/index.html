@@ -199,8 +199,9 @@ details.settings .row input { font: inherit; font-size: 13px; border: 1px solid 
   <div class="exopts">
     <label class="sw"><input type="checkbox" id="exprompt" checked> Original prompt <small>the request, typed into a message</small></label>
     <label class="sw"><input type="checkbox" id="exmodel" checked> Model and reasoning <small>the model's name, its reasoning if it has one, and its answer</small></label>
-    <div class="exrow"><label for="expace">Text pace</label><input type="range" id="expace" min="10" max="80" step="5" value="25"><output id="expacev" for="expace"></output></div>
-    <div class="exrow"><label for="exspeed">Simulation speed</label><select id="exspeed"><option value="0.5">0.5x</option><option value="1" selected>1x</option><option value="2">2x</option><option value="4">4x</option></select></div>
+    <div class="exrow"><label for="expace">Thinking pace</label><input type="range" id="expace" min="10" max="80" step="5" value="25"><output id="expacev" for="expace"></output></div>
+    <div class="exrow"><label for="excpace">Code pace</label><input type="range" id="excpace" min="20" max="160" step="10" value="50"><output id="excpacev" for="excpace"></output></div>
+    <div class="exrow"><label for="exspeed">Simulation speed</label><select id="exspeed"><option value="0.5">0.5x</option><option value="1">1x</option><option value="2" selected>2x</option><option value="4">4x</option></select></div>
   </div>
   <div class="genfoot"><progress id="exprog" max="1" value="0" hidden></progress><span id="exstate"></span><span style="flex:1"></span><button class="primary" id="exgo">Export</button></div>
 </div></dialog>
@@ -762,14 +763,14 @@ function exportState(s) {                                               // the o
   st.textContent = x.text || ""; st.className = x.error ? "bad" : "";
 }
 function setupExport() {
-  const dlg = $("#exdlg"), pace = () => { $("#expacev").textContent = `${$("#expace").value} words/s`; };
-  $("#expace").oninput = pace; pace();
+  const dlg = $("#exdlg"), pace = () => { $("#expacev").textContent = `${$("#expace").value} words/s`; $("#excpacev").textContent = `${$("#excpace").value} words/s`; };
+  $("#expace").oninput = $("#excpace").oninput = pace; pace();
   $("#exclose").onclick = () => dlg.close();
   dlg.onclick = (ev) => { if (ev.target === dlg) dlg.close(); };
   $("#exgo").onclick = async () => {
     const s = exportSide, v = video[s]; if (!v) return;
     exporting[s] = { busy: true, progress: 0, text: "starting…" }; exportState(s);
-    const r = await post("/api/export", { run: v.run, side: s, prompt: $("#exprompt").checked, model: $("#exmodel").checked, pace: +$("#expace").value, speed: +$("#exspeed").value });
+    const r = await post("/api/export", { run: v.run, side: s, prompt: $("#exprompt").checked, model: $("#exmodel").checked, pace: +$("#expace").value, code_pace: +$("#excpace").value, speed: +$("#exspeed").value });
     if (r.error) { exporting[s] = { error: true, text: r.error }; return exportState(s); }
     const tick = async () => {
       const st = await (await fetch(`/api/export/${r.job}`)).json();

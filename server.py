@@ -573,7 +573,7 @@ def export(job, run, side, req):
             meta, out = run.meta[side], EXPORT_DIR / f"{job}.mp4"
             spec = dict(ffmpeg=recorder.FFMPEG, video=str(run.videos[side][0]), frames=meta["frames"], out=str(out),
                         prompt=meta["prompt"] if req.get("prompt") else "", model=meta["model"] if req.get("model") else "",
-                        reasoning=meta["reasoning"], answer=meta["answer"], pace=float(req.get("pace") or 25), speed=float(req.get("speed") or 1))
+                        reasoning=meta["reasoning"], answer=meta["answer"], pace=float(req.get("pace") or 25), code_pace=float(req.get("code_pace") or 0), speed=float(req.get("speed") or 2))
             spec_file = Path(tempfile.mkdtemp()) / "export.json"
             spec_file.write_text(json.dumps(spec))
             p = subprocess.Popen([sys.executable, str(HERE / "exporter.py"), str(spec_file)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
