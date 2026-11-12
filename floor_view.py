@@ -15,11 +15,11 @@ GRID_CELL = 0.10                                 # [m] one grid cell, chosen ove
 TEX = 2000                                       # one texture tile = 1 m x 1 m (MuJoCo: texrepeat 1 = 2 m on a plane, hence "2 2"), so 1 pixel = 0.5 mm
 FLOOR, MINOR, MAJOR = (222, 216, 204), (190, 183, 170), (150, 142, 128)   # a light warm floor, so the coloured cubes stand out; lines every cell / every metre
 # What the frames look like. All of it is visual: it only exists in the drawing model.
-# offsamples = multisampling of the offscreen buffer (smooth edges), shadowsize = shadow map, offwidth/offheight = the largest frame sim_worker.py may ask for.
+# offsamples = multisampling of the offscreen buffer (smooth edges), offwidth/offheight = the largest frame sim_worker.py may ask for. No shadows (the user's choice).
 VISUAL = """<visual>
   <global offwidth="{w}" offheight="{h}"/>
-  <quality offsamples="4" shadowsize="4096"/>
-  <map shadowclip="1.6" shadowscale="0.6" znear="0.02"/>
+  <quality offsamples="4"/>
+  <map znear="0.02"/>
   <rgba haze="0.88 0.90 0.93 1"/>
 </visual>
 """
@@ -30,8 +30,8 @@ ASSET = f"""<asset>
   <material name="p2r_cube" specular="0.45" shininess="0.5" reflectance="0"/>
 </asset>
 """
-# A warm key light from the front left that casts the shadows, a cool fill from the other side without shadows (it lifts the shaded cube faces)
-LIGHTS = """<light name="p2r_key" pos="-0.6 1.2 2.4" dir="0.30 -0.40 -1" directional="true" castshadow="true" diffuse="0.36 0.34 0.32" specular="0.30 0.30 0.28"/>
+# A warm key light from the front left and a cool fill from the other side (it lifts the shaded cube faces); neither casts a shadow
+LIGHTS = """<light name="p2r_key" pos="-0.6 1.2 2.4" dir="0.30 -0.40 -1" directional="true" castshadow="false" diffuse="0.36 0.34 0.32" specular="0.30 0.30 0.28"/>
     <light name="p2r_fill" pos="1.6 -1.2 1.6" dir="-0.5 0.4 -0.6" directional="true" castshadow="false" diffuse="0.12 0.13 0.15" specular="0.05 0.05 0.06"/>
 """
 
