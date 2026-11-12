@@ -561,7 +561,7 @@ def work(run, side, req):
             if answer_row and e["t"] == "result" and e["executed"]:
                 e.update(success=False, reasons=["this question needs one short sentence, not a program: the arm must not move"])
             if e["t"] == "result":
-                result = {k: e.get(k) for k in ("executed", "error", "success", "strict_flags", "final", "sim_seconds", "calls")}
+                result = {k: e.get(k) for k in ("executed", "error", "success", "strict_flags", "events", "frame_dt", "final", "sim_seconds", "calls")}
             run.emit(side, e.pop("t"), kind="code", **e)
         p.wait()
         video = rec.finish()

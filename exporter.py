@@ -10,7 +10,7 @@ answer (highlighted Python, or plain text), then straight into the simulation at
 sharp input scene for 1.5 s before it blurs and dims.
 Every frame is drawn with Pillow and piped into one ffmpeg (H.264, yuv420p, TV range); the recording is decoded and scaled by a second ffmpeg,
 one frame at a time: memory stays flat however long the run or the reasoning is.
-With "music", music.py composes a soundtrack from the finished timeline (sections, typed words, code lines, the simulator's flags and result) and a third
+With "music", music.py composes a soundtrack from the finished timeline (sections, typed words, code lines, the simulator's flags, events and result) and a third
 ffmpeg muxes it in as stereo AAC; if that fails for any reason the silent video is delivered instead."""
 import bisect
 import json
@@ -395,13 +395,23 @@ def first_frame(job):
 
 def music_plan(job, intro, n_intro, n_out, speed):
     """Everything music.py follows, in seconds of the finished video: the intro's cues, the simulation span, the moment the program ended
-    (the recording ends with recorder.HOLD frames of its end state), the simulator's collision flags (recorded in simulated seconds) and its result."""
+    (the recording ends with recorder.HOLD frames of its end state), the simulator's collision flags and its events (grasps, releases, landings:
+    recorded in simulated seconds, placed on the video's clock exactly as their frames are) and its result."""
     sections, events = intro.cues() if intro else ({}, {})
     end, t_sim = n_out / FPS, n_intro / FPS
     result = job.get("result") or {}
-    t_end = min(end - 1.0, t_sim + max(0, job.get("frames", 0) - FPS) / speed / FPS)
+    n_rec = max(0, job.get("frames", 0) - FPS)                                  # frames of the recording without its hold
+    t_end = min(end - 1.0, t_sim + n_rec / speed / FPS)
+    frame_dt = float(result.get("frame_dt") or 1 / FPS)                         # simulated seconds per recorded frame (0.034 in sim_worker.py)
+
+    def at(sim_s):
+        """Recorded frame k is drawn at simulated (k + 1) * frame_dt and shown as output frame k / speed; a moment past the recording's end
+        (recorder.MAX_FRAMES) lands in the hold."""
+        k = min(max(sim_s / frame_dt - 1, 0), n_rec)
+        return t_sim + k / speed / FPS
     sections["sim"], sections["hold"] = (t_sim, t_end), (t_end, end)
-    events["flags"] = [t_sim + float(f["sim_s"]) / speed for f in result.get("strict_flags") or [] if "sim_s" in f]
+    events["flags"] = [at(float(f["sim_s"])) for f in result.get("strict_flags") or [] if "sim_s" in f]
+    events["sim_events"] = [dict(e, t=at(float(e["sim_s"]))) for e in result.get("events") or [] if "sim_s" in e and "what" in e]
     events["program_end"] = t_end
     return dict(duration=end, request=job.get("request") or job.get("prompt") or "", model=job.get("model") or "", speed=speed, scene=job.get("scene"),
                 result=result, code=job.get("code") or "", sections=sections, events=events)

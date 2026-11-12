@@ -1,4 +1,5 @@
-"""Runs ONE program in the MuJoCo simulation and streams JSON lines on stdout: frames (base64 JPEG) while it runs, then a result.
+"""Runs ONE program in the MuJoCo simulation and streams JSON lines on stdout: frames (base64 JPEG) while it runs, the events of the picture
+(grasps, releases, cubes landing: see Tracker), then a result.
 usage: python sim_worker.py <job.json>     job = {"scene": {...}, "code": "...", "sample": {...} or null, "speed": 4.0}
 
 The program runs through the exact same API/sandbox the dataset was verified with (sim/robot.py), so what you see here is what
@@ -22,8 +23,9 @@ from PIL import Image  # noqa: E402
 import importlib  # noqa: E402
 import floor_view  # noqa: E402
 import lara_view  # noqa: E402
+import numpy as np  # noqa: E402
 import robot as R  # noqa: E402
-from scene import TIMESTEP  # noqa: E402
+from scene import CUBE, TIMESTEP  # noqa: E402
 
 OUT = os.fdopen(os.dup(1), "w")          # protocol channel; anything else printed on fd 1 goes to stderr
 os.dup2(2, 1)
@@ -81,11 +83,106 @@ def count_calls(code):
         return 0
 
 
+# What happens in the picture, with its moment on the frames' clock (sim_s = steps * TIMESTEP): the export's music plays these in sync with the video.
+# Every event is read off the simulation state at frame cadence (the same steps the frames are drawn at, so an event is never off by more than a
+# frame) and only read: nothing here steps, settles or touches the physics.
+#   grasp    the gripper closed (cube = what it holds now, None if it closed on nothing)
+#   release  the gripper opened (cube = what it let go, None if it was empty)
+#   land     a cube came to rest after it was let go or knocked: onto = "table" or the cube under it, height = the stack it tops (1 on the table),
+#            fall = how far it fell (m); "drop" instead of "land" when it fell more than a cube's edge
+#   Each is a line {t: "event", sim_s, what, ...} as it happens and all of them are the result's "events".
+EVENTS = []
+MOVING, STILL, FALL_DROP = 0.05, 0.01, CUBE                            # m/s: a cube that is on its way / that has come to rest; a drop
+
+
+class Tracker:
+    def __init__(self):
+        self.gripper, self.pending, self.fingers = None, {}, None         # gripper: the call in progress, pending: cubes on their way
+
+    def sim_s(self, sim):
+        return round(sim.steps * TIMESTEP, 3)
+
+    def event(self, sim, **kw):
+        e = dict(sim_s=self.sim_s(sim), **kw)
+        EVENTS.append(e)
+        emit(t="event", **e)
+
+    def gripper_call(self, sim, opening):
+        """close_gripper / open_gripper started: the frames of this call tell when the fingers meet the cube or let go of it."""
+        self.gripper = dict(opening=opening, before=set(sim.held_objects()), done=False, frames=0)
+        self.fingers = sim.data.qpos[sim.finger_qadr].copy()
+
+    def gripper_done(self, sim):
+        """The call returned: whatever the frames did not catch (a close on nothing that stopped between two frames) is recorded now."""
+        g, self.gripper = self.gripper, None
+        held = set(sim.held_objects())
+        if g and not g["done"]:
+            cubes = sorted(g["before"] - held if g["opening"] else held - g["before"])
+            self.event(sim, what="release" if g["opening"] else "grasp", cube=cubes[0] if cubes else None)
+            for i in cubes if g["opening"] else ():
+                self.pending[i] = dict(z0=float(sim.obj_pos(i)[2]), moved=False, frames=0)
+
+    def observe(self, sim):
+        """Once per frame."""
+        held = set(sim.held_objects())
+        g = self.gripper
+        if g and not g["done"]:
+            g["frames"] += 1
+            fingers = sim.data.qpos[sim.finger_qadr].copy()
+            stopped = g["frames"] > 2 and np.max(np.abs(fingers - self.fingers)) < 1e-4
+            self.fingers = fingers
+            if g["opening"] and (g["before"] - held or (stopped and not g["before"])):
+                let_go = sorted(g["before"] - held)
+                g["done"] = True
+                self.event(sim, what="release", cube=let_go[0] if let_go else None)
+                for i in let_go:
+                    self.pending[i] = dict(z0=float(sim.obj_pos(i)[2]), moved=False, frames=0)
+            elif not g["opening"] and (held - g["before"] or stopped):
+                got = sorted(held - g["before"])
+                g["done"] = True
+                self.event(sim, what="grasp", cube=got[0] if got else None)
+        for i in sim.ids:                                                   # cubes on their way: let go, pushed, knocked off a stack
+            if i in held:
+                self.pending.pop(i, None)
+                continue
+            da = sim.model.jnt_dofadr[sim.model.body_jntadr[sim.body[i]]]
+            v = float(np.linalg.norm(sim.data.qvel[da:da + 3]))
+            p = self.pending.get(i)
+            if p is None:
+                if v > MOVING:
+                    self.pending[i] = dict(z0=float(sim.obj_pos(i)[2]), moved=True, frames=0)
+                continue
+            p["frames"] += 1
+            p["moved"] = p["moved"] or v > MOVING
+            if v < STILL and (p["moved"] or p["frames"] >= 2):
+                del self.pending[i]
+                onto, height = self.support(sim, i)
+                fall = max(0.0, p["z0"] - float(sim.obj_pos(i)[2]))
+                self.event(sim, what="drop" if fall > FALL_DROP else "land", cube=i, onto=onto, height=height, fall=round(fall, 3))
+
+    def support(self, sim, i):
+        """What cube i rests on (the nearest cube one edge below it, else the table) and the height of the stack it tops."""
+        pos = {j: sim.obj_pos(j) for j in sim.ids}
+        height, seen = 1, {i}
+        onto = None
+        while True:
+            p = pos[i]
+            below = [(abs(p[2] - pos[j][2] - CUBE) + np.hypot(*(p[:2] - pos[j][:2])), j) for j in sim.ids
+                     if j not in seen and abs(p[2] - pos[j][2] - CUBE) < CUBE / 3 and np.hypot(*(p[:2] - pos[j][:2])) < CUBE * 0.9]
+            if not below:
+                return onto or "table", height
+            i = min(below)[1]
+            onto = onto or i
+            height += 1
+            seen.add(i)
+
+
 def install_frame_hook(speed):
-    """Wrap Sim._step so that a rendered frame is streamed every FRAME_EVERY physics steps, paced to `speed` x real time.
-    Returns a function that removes the hook again."""
+    """Wrap Sim._step so that a rendered frame is streamed every FRAME_EVERY physics steps, paced to `speed` x real time; the gripper calls are
+    wrapped so that the Tracker above sees them. Returns a function that removes the hooks again."""
     st = dict(renderer=None, cam=None, last=time.time())
-    orig_step = R.Sim._step
+    orig_step, orig_open, orig_close = R.Sim._step, R.Sim.open_gripper, R.Sim.close_gripper
+    track = Tracker()
 
     def render(sim):
         if st["renderer"] is None:
@@ -122,11 +219,24 @@ def install_frame_hook(speed):
         out = orig_step(self, *a, **k)
         self._n = getattr(self, "_n", 0) + 1
         if self._n % FRAME_EVERY == 0:
+            track.observe(self)
             render(self)
         return out
 
-    R.Sim._step = step
-    return lambda: setattr(R.Sim, "_step", orig_step)
+    def gripper(orig, opening):
+        def wrapped(self):
+            track.gripper_call(self, opening)
+            try:
+                return orig(self)
+            finally:
+                track.gripper_done(self)
+        return wrapped
+
+    R.Sim._step, R.Sim.open_gripper, R.Sim.close_gripper = step, gripper(orig_open, True), gripper(orig_close, False)
+
+    def remove():
+        R.Sim._step, R.Sim.open_gripper, R.Sim.close_gripper = orig_step, orig_open, orig_close
+    return remove
 
 
 def next_scene(final, sim):
@@ -149,6 +259,7 @@ def main():
     res = dict(t="result", executed=err is None, error=err, final=final, sim_seconds=round(sim.steps * TIMESTEP, 1),
                calls=count_calls(code), wall=round(time.time() - t0, 1))
     res["strict_flags"] = list(FLAGS)
+    res["events"], res["frame_dt"] = list(EVENTS), FRAME_EVERY * TIMESTEP        # frame_dt: simulated seconds between two recorded frames
     if sample and err is None:
         try:
             ok, reasons = C.check(dict(sample, assistant_answer=code))

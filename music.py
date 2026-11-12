@@ -4,7 +4,8 @@ no network; the same plan always gives the same track.     compose(plan) -> floa
 plan = {"duration" (seconds of the video), "request" (the instruction), "model", "speed", "scene" ({objects: {id: {color, position}}}),
         "result" (the simulator's result event or None: executed, error, success, strict_flags, final), "code" (the program or ""),
         "sections": {name: (start, end) in seconds; any of scene, prompt, handoff, think, code, sim, hold},
-        "events": {"prompt_words", "reason_words", "code_lines", "flags": [seconds], "code_text": [the lines], "pulse": seconds or None, "program_end": seconds or None}}
+        "events": {"prompt_words", "reason_words", "code_lines", "flags": [seconds], "code_text": [the lines], "pulse": seconds or None, "program_end": seconds or None,
+                   "sim_events": [{t: seconds, what: grasp | release | land | drop, cube, onto, height, fall}] (what the simulator saw, see sim_worker.py)}}
 
 What the video decides:  the request text seeds everything (key, mode, tempo, the progressions, the drum feel, the phrasing), so the same
 request always sounds the same and a new request sounds new.  The cubes are the motif: every cube is a note (its colour picks the scale step,
@@ -16,7 +17,12 @@ rising arpeggio as it appears (a close_gripper line is a low grab, an open_gripp
 drums come in underneath.  The simulation is the full groove: kick, snare and hats (half time below 1x,
 driving above 8x: the speed sets the feel, the number of robot calls per shown second the density), a bass line, the cube theme in phrases; every
 collision flag of the simulator is a dissonant stab at its moment in the picture; the pad breathes with the kick, and every eighth bar the
-drums step out for a bar and come back with a crash.  The program's end gets its cadence: a bright major chord with
+drums step out for a bar and come back with a crash.  What the gripper does is heard as it happens (the simulator's events, each nudged onto
+the nearest sixteenth when that is within 50 ms, else left exactly on its frame): the gripper closing on a cube is a grab (a kick, the cube's note
+low, the chord as a stab), letting it go in the air is a high release figure, setting it down is a soft thud on the cube's note, a cube landing on a
+stack rings a bell that climbs the scale with the stack's height, a cube dropped from above a cube's edge is a clunk, and the landing that completes
+the run's tallest stack gets a fanfare (three lead notes up the chord, a bell, a crash); at high speeds the events are thinned (never more than five
+a second, the tallest landings and drops kept first), so a 30x run is a rhythm of the robot's work, not noise.  The program's end gets its cadence: a bright major chord with
 bells if the task was solved, a plain tonic if nothing was checked, a dark minor chord if the run failed; it rings through the final hold.
 Everything is rendered into three buses (dry, delay send, reverb send), then a ping-pong delay, a convolution reverb with a synthetic tail, a
 soft clipper, a look-ahead peak limiter (ceiling -1 dBFS) and a loudness fit around -15 dBFS RMS, which social platforms play back unchanged."""
@@ -334,18 +340,56 @@ def _thin(times, max_rate):
     return out
 
 
+EVENT_RANK = {"complete": 0, "drop": 1, "stack": 2, "grasp": 2, "release": 3, "land": 3}      # who wins when two events are too close (then the earlier)
+
+
+def sim_events(raw, t0, t1, beat, gap):
+    """The simulator's events as the music plays them: a release that a landing of the same cube follows within 150 ms is one event (the cube
+    was set down; a drop keeps its release: let go, then the clunk), a landing on a stack is a "stack", the landing that completes the run's
+    tallest stack (none of its cubes drops later) is "complete";
+    then each is nudged onto the nearest sixteenth when that is within 50 ms, and events are kept at least `gap` seconds apart, the important
+    ones first. Returns [(t, kind, event)] in time order."""
+    evs = sorted((e for e in raw if t0 <= e["t"] < t1 and e["what"] in EVENT_RANK), key=lambda e: e["t"])
+    out = []
+    for k, e in enumerate(evs):
+        kind = e["what"]
+        if kind == "release" and any(f["what"] == "land" and f.get("cube") == e.get("cube") and f["t"] - e["t"] < 0.15 for f in evs[k + 1:k + 3]):
+            continue
+        if kind == "land" and (e.get("height") or 1) >= 2:
+            kind = "stack"
+        out.append([e["t"], kind, e])
+    tallest = max((e.get("height") or 1 for _, k, e in out if k == "stack"), default=0)
+    tops = [i for i, (_, k, e) in enumerate(out) if k == "stack" and e.get("height") == tallest]
+    if tops:
+        top = tops[-1]
+        stacked = {str(e.get(f)) for _, k, e in out[:top + 1] if k == "stack" for f in ("cube", "onto")}
+        if not any(k == "drop" and str(e.get("cube")) in stacked for _, k, e in out[top + 1:]):     # the stack did not come down again
+            out[top][1] = "complete"
+    step = beat / 4
+    for ev in out:
+        q = t0 + round((ev[0] - t0) / step) * step
+        if abs(q - ev[0]) < 0.05:
+            ev[0] = q
+    kept = []
+    for ev in sorted(out, key=lambda ev: (EVENT_RANK[ev[1]], ev[0])):
+        if all(abs(ev[0] - o[0]) >= gap for o in kept):
+            kept.append(ev)
+    return sorted(kept, key=lambda ev: ev[0])
+
+
 def motif_of(scene, result):
-    """The cubes as notes: (scale step, pan, moved) per cube, sorted by id; moved = more than 2 cm away in the simulator's final state."""
+    """The cubes as notes: (scale step, pan, moved) per cube, sorted by id, and the ids in the same order; moved = more than 2 cm away in the
+    simulator's final state."""
     objs = (scene or {}).get("objects") or {}
     final = ((result or {}).get("final") or {}).get("objects") or {}
-    notes = []
-    for i in sorted(objs, key=lambda k: (len(k), k)):
+    notes, ids = [], sorted(objs, key=lambda k: (len(k), k))
+    for i in ids:
         o = objs[i]
         pos = o.get("position") or [0.45, 0, 0]
         fin = (final.get(i) or {}).get("position")
         moved = bool(fin) and math.dist(pos[:2], fin[:2]) > 0.02
         notes.append((COLOR_STEP.get(str(o.get("color", "")).lower(), 0), float(np.clip(-pos[1] / 0.3, -1, 1)), moved))
-    return notes[:16] or [(0, 0.0, False), (4, 0.0, False), (2, 0.0, False)]
+    return (notes[:16], ids[:16]) if notes else ([(0, 0.0, False), (4, 0.0, False), (2, 0.0, False)], [])
 
 
 # ---- the composition
@@ -358,7 +402,8 @@ def compose(plan):
     beat, bar = 60 / bpm, 240 / bpm
     sec, ev = plan.get("sections") or {}, plan.get("events") or {}
     result = plan.get("result") or {}
-    motif = motif_of(plan.get("scene"), result)
+    motif, cube_ids = motif_of(plan.get("scene"), result)
+    cube_note = dict(zip(cube_ids, motif))                          # id -> (step, pan, moved): the note of each cube
     speed = float(plan.get("speed") or 1)
     voice = _seed(plan.get("model") or "") % 3                      # the model's voice: 0 electric piano, 1 plucks, 2 bells (and the pad's colour)
     lead = (epiano, lambda f, v, d: pluck(f, v, d, 1.0, 2.0), lambda f, v, d: bell(f, v * 0.8, d + 0.8))[voice]
@@ -519,6 +564,44 @@ def compose(plan):
         for t in _thin(sorted(ev.get("flags") or []), 2):           # the simulator flagged a collision here
             if t_sim <= t < t_end:
                 mix.add(stab(_midi(key.midi(0, 3)), rng), t, gain=0.6, verb=0.3)
+        # what the gripper did, when the picture shows it: grabs, releases, cubes set down, landing on a stack (the bell climbs with the height),
+        # drops, and the landing that completes the tallest stack
+        events = sim_events(ev.get("sim_events") or [], t_sim, t_end, beat, 0.06 if speed <= 2 else 0.12 if speed <= 8 else 0.2)
+        soft = 0.75 if len(events) > 2 * (t_end - t_sim) else 1.0   # a busy run plays its events a little softer
+        ladder = [0, 2, 4, 7, 9, 11, 14, 16]                        # the stack's height picks a scale step above the chord: higher stack, higher bell
+        for t, kind, e in events:
+            c = chord_at(t)
+            step, pan, _ = cube_note.get(str(e.get("cube")), motif[0])
+            note = key.midi(step, 4)
+            if kind == "grasp":
+                mix.add(kick(0.85, rng), t, gain=0.8 * soft, verb=0.05)
+                mix.add(pluck(_midi(note - 12), 0.9, 0.25, 1.0, 3.0), t, pan=pan * 0.5, gain=0.5 * soft, verb=0.3)
+                for m in c[3]:
+                    mix.add(epiano(_midi(m), 0.6, beat * 0.3), t, pan=(m % 5 - 2) * 0.3, gain=0.4 * soft, verb=0.3, delay=0.2)
+            elif kind == "release":
+                mix.add(hat(0.4, True, rng), t, pan=-0.2, gain=0.4 * soft)
+                mix.add(bell(_midi(note + 12), 0.5, 1.2), t, pan=pan * 0.6, gain=0.4 * soft, verb=0.7, delay=0.4)
+                mix.add(bell(_midi(note + 19), 0.3, 0.9), t + beat / 4, pan=-pan * 0.4, gain=0.3 * soft, verb=0.7, delay=0.4)
+            elif kind == "land":
+                mix.add(kick(0.5, rng), t, gain=0.55 * soft, verb=0.1)
+                mix.add(pluck(_midi(note), 0.7, 0.3, 1.0, 1.5), t, pan=pan * 0.6, gain=0.45 * soft, verb=0.4, delay=0.25)
+            elif kind in ("stack", "complete"):
+                h = min(max(int(e.get("height") or 2), 2), len(ladder) + 1)
+                top = key.midi(c[2] + ladder[h - 2], 5)
+                mix.add(kick(0.6, rng), t, gain=0.6 * soft, verb=0.1)
+                mix.add(pluck(_midi(note), 0.7, 0.3, 1.0, 1.5), t, pan=pan * 0.6, gain=0.4 * soft, verb=0.4)
+                mix.add(bell(_midi(top), 0.5 + 0.05 * h, 1.6), t, pan=-pan * 0.4, gain=0.45 * soft, verb=0.75, delay=0.4)
+                if kind == "complete":                              # the tallest stack is done: a fanfare up the chord
+                    v = c[3] + [c[3][0] + 12]
+                    for k, m in enumerate((v[0], v[1], v[-1])):
+                        mix.add(lead(_midi(m + 12), 0.9, beat * 0.5), t + k * beat / 4, pan=-0.3 + 0.3 * k, gain=0.55 * soft, verb=0.4, delay=0.3)
+                    mix.add(bell(_midi(top + 12), 0.5, 2.2), t + beat / 2, pan=0.2, gain=0.4 * soft, verb=0.8, delay=0.4)
+                    mix.add(crash(0.45, rng), t + beat / 2, gain=0.45 * soft, verb=0.4)
+            elif kind == "drop":                                    # a clunk: a thud with a sour low cluster
+                mix.add(kick(0.9, rng), t, gain=0.8 * soft, verb=0.1)
+                mix.add(snare(0.5, rng), t, gain=0.4 * soft, verb=0.3)
+                mix.add(pluck(_midi(note - 12), 0.9, 0.15, 1.0, 2.5), t, pan=pan * 0.5, gain=0.45 * soft, verb=0.3)
+                mix.add(pluck(_midi(note - 11), 0.7, 0.15, 1.0, 2.5), t, pan=pan * 0.5, gain=0.3 * soft, verb=0.3)
 
     # -- the end of the program: the cadence rings through the hold
     if failed:
