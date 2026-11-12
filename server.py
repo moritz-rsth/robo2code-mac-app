@@ -630,7 +630,7 @@ class Handler(BaseHTTPRequestHandler):
             if name not in DATASETS:
                 return self._json({"error": "unknown dataset"}, 404)
             self._json(dict(rows=[dict(id=e["id"], subcategory=e.get("subcategory", ""), split=e.get("split", ""), scene=e["scene"], dataset=name,
-                                       instruction=e.get("request") or request_of(e), reasoning=bool(e.get("reasoning")),
+                                       instruction=e.get("request") or request_of(e), reasoning=bool(e.get("reasoning")), behavior=e.get("expected_behavior", ""),
                                        **{k: e[k] for k in PROVENANCE if e.get(k)}) for e in dataset_rows(name).values()]))
         elif self.path.startswith("/api/answer/"):           # the reference answer of one example; /api/config stays light without them
             path, _, dataset = self.path.partition("?dataset=")

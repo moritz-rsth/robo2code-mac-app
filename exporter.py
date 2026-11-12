@@ -372,7 +372,7 @@ def main():
     except (AttributeError, OSError):
         pass
     job = json.loads(Path(sys.argv[1]).read_text())
-    speed = min(max(float(job.get("speed") or 1), 0.25), 8)
+    speed = min(max(float(job.get("speed") or 1), 0.25), 30)
     intro = Intro(job, first_frame(job)) if (job.get("prompt") or job.get("model")) else None
     n_intro, n_sim = intro.frames() if intro else 0, int(job.get("frames", 0) / speed) + FPS
     total, done = max(1, n_intro + n_sim), 0

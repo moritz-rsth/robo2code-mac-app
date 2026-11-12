@@ -62,11 +62,12 @@ pre { margin: 10px 0 0; background: var(--bg); border: 1px solid var(--line); bo
 .basebar .ok { color: #1b6b3c; } .basebar .down { color: #845a05; }
 .basebar select { flex: 0 1 320px; width: 0; }
 .picker textarea { font-family: var(--mono); font-size: 12px; line-height: 1.5; }
-dialog { border: 1px solid var(--line); border-radius: 16px; padding: 0; width: min(640px, calc(100vw - 32px)); margin-top: 12vh; color: var(--ink); background: var(--surface); }
+dialog { border: 1px solid var(--line); border-radius: 16px; padding: 0; width: min(640px, calc(100vw - 32px)); margin: auto; color: var(--ink); background: var(--surface); }
 dialog::backdrop { background: rgba(22,23,26,.25); }
 .idbox { padding: 12px; } .idbox input { width: 100%; font: inherit; font-size: 14px; border: 1px solid var(--line); border-radius: 10px; padding: 7px 10px; background: var(--bg); color: var(--ink); }
 .idpick[hidden] { display: none; } .idpick { display: flex; gap: 8px; margin-bottom: 8px; } .idpick select { flex: 1; min-width: 0; }
-#idlist { margin-top: 8px; max-height: 50vh; overflow: auto; }
+#idlist { margin-top: 8px; height: 50vh; overflow: auto; }                /* a fixed height: the centred overlay does not jump while typing */
+#idlist mark { background: var(--link-bg); color: inherit; border-radius: 3px; } #idlist i { font-style: normal; font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 6px; padding: 0 5px; margin-left: 6px; }
 #idlist button { display: block; width: 100%; text-align: left; border: 0; border-radius: 8px; padding: 5px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #idlist button:hover, #idlist button:focus { background: var(--link-bg); } #idlist b { font-family: var(--mono); font-weight: 500; font-size: 12px; } #idlist span, #idlist p { color: var(--muted); font-size: 12px; } #idlist p { margin: 6px 8px; }
 .sent { margin: 8px 0 0; font-size: 12.5px; color: var(--muted); }
@@ -215,11 +216,11 @@ details.settings .row input { font: inherit; font-size: 13px; border: 1px solid 
     <label class="sw"><input type="checkbox" id="exmodel" checked> Model and reasoning <small>the model's name, its reasoning if it has one, and its answer</small></label>
     <div class="exrow"><label for="expace">Thinking pace</label><input type="range" id="expace" min="10" max="80" step="5" value="25"><output id="expacev" for="expace"></output></div>
     <div class="exrow"><label for="excpace">Code pace</label><input type="range" id="excpace" min="20" max="160" step="10" value="50"><output id="excpacev" for="excpace"></output></div>
-    <div class="exrow"><label for="exspeed">Simulation speed</label><select id="exspeed"><option value="0.5">0.5x</option><option value="1">1x</option><option value="2" selected>2x</option><option value="4">4x</option></select></div>
+    <div class="exrow"><label for="exspeed">Simulation speed</label><select id="exspeed"><option value="0.5">0.5x</option><option value="1">1x</option><option value="2" selected>2x</option><option value="4">4x</option><option value="8">8x</option><option value="10">10x</option><option value="15">15x</option><option value="20">20x</option><option value="30">30x</option></select></div>
   </div>
   <div class="genfoot"><progress id="exprog" max="1" value="0" hidden></progress><span id="exstate"></span><span style="flex:1"></span><button class="primary" id="exgo">Export</button></div>
 </div></dialog>
-<dialog id="iddlg"><div class="idbox"><div class="idpick"><select id="idds" aria-label="Dataset"></select><select id="idsplit" aria-label="Split"></select></div><input id="idq" placeholder="search by id" autocomplete="off" spellcheck="false" aria-label="Search examples by id"><div id="idlist"></div></div></dialog>
+<dialog id="iddlg"><div class="idbox"><div class="idpick"><select id="idds" aria-label="Dataset"></select><select id="idsplit" aria-label="Split"></select></div><input id="idq" placeholder="search by id, category or words of the request" autocomplete="off" spellcheck="false" aria-label="Search examples by id, category or request text"><div id="idlist"></div></div></dialog>
 <script>
 const $ = (s, el = document) => el.querySelector(s);
 let scene = null, exampleId = null, exampleDataset = null, es = null;
@@ -529,14 +530,41 @@ function setupIdSearch() {
   let rows = examples;
   ds.append(...datasets.map((n) => new Option(n, n)));
   $(".idpick").hidden = !datasets.length;                             // no datasets folder: the held-out examples, as before
-  const hits = () => rows.filter((e) => (!sp.value || e.split === sp.value) && e.id.toLowerCase().includes(q.value.trim().toLowerCase()));
+  // every word of the query must appear in the id, the category, the behaviour or the request; id matches rank first
+  const words = () => q.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const score = (e, ws) => {
+    const id = e.id.toLowerCase(), meta = `${e.subcategory || ""} ${e.behavior || ""}`.toLowerCase(), text = e.instruction.toLowerCase();
+    let s = 0;
+    for (const w of ws) {
+      if (id.startsWith(w)) s += 4; else if (id.includes(w)) s += 3; else if (meta.includes(w)) s += 2; else if (text.includes(w)) s += 1; else return -1;
+    }
+    return s;
+  };
+  const hits = () => {
+    const ws = words(), pool = rows.filter((e) => !sp.value || e.split === sp.value);
+    if (!ws.length) return pool;
+    return pool.map((e) => [score(e, ws), e]).filter(([s]) => s >= 0).sort((a, b) => b[0] - a[0] || a[1].id.localeCompare(b[1].id, undefined, { numeric: true })).map(([, e]) => e);
+  };
+  const mark = (el, str, ws) => {                                      // the matched words, highlighted
+    const re = ws.length ? new RegExp(`(${ws.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`, "gi") : null;
+    for (const part of re ? str.split(re) : [str]) {
+      if (re && ws.includes(part.toLowerCase())) { const m = document.createElement("mark"); m.textContent = part; el.append(m); } else el.append(part);
+    }
+  };
   const show = () => {
-    const found = hits(); list.innerHTML = "";
+    const found = hits(), ws = words(); list.innerHTML = "";
     for (const e of found.slice(0, SHOW)) {
       const b = document.createElement("button"), id = document.createElement("b"), rest = document.createElement("span");
-      id.textContent = e.id; rest.textContent = `  ${e.subcategory} · ${e.instruction.split(/\s+/).slice(0, 8).join(" ")}`; b.append(id, rest); b.onclick = () => pickExample(e); list.append(b);
+      mark(id, e.id, ws); mark(rest, `  ${e.subcategory} · ${e.instruction.split(/\s+/).slice(0, 12).join(" ")}`, ws); b.append(id, rest);
+      if (e.behavior && e.behavior !== "execute") { const tag = document.createElement("i"); tag.textContent = e.behavior; b.append(tag); }
+      b.title = e.instruction; b.onclick = () => pickExample(e); list.append(b);
     }
-    if (!found.length || found.length > SHOW) { const n = document.createElement("p"); n.textContent = found.length ? `${found.length - SHOW} more, type to narrow it down` : "no example here with this id"; list.append(n); }
+    if (!found.length || found.length > SHOW) { const n = document.createElement("p"); n.textContent = found.length ? `${found.length - SHOW} more, type to narrow it down` : "no example matches all of these words"; list.append(n); }
+  };
+  list.onkeydown = (ev) => {                                           // arrow keys walk the results, Up from the first one returns to the field
+    const bs = [...list.querySelectorAll("button")], i = bs.indexOf(document.activeElement);
+    if (ev.key === "ArrowDown" && i < bs.length - 1) { ev.preventDefault(); bs[i + 1].focus(); }
+    if (ev.key === "ArrowUp") { ev.preventDefault(); (i > 0 ? bs[i - 1] : q).focus(); }
   };
   const pickDataset = async () => {
     const name = ds.value;
@@ -550,7 +578,10 @@ function setupIdSearch() {
   };
   $("#loadid").onclick = () => { q.value = ""; dlg.showModal(); q.focus(); pickDataset(); };
   ds.onchange = pickDataset; sp.onchange = show; q.oninput = show;
-  q.onkeydown = (ev) => { if (ev.key === "Enter") { ev.preventDefault(); const e = hits()[0]; if (e) pickExample(e); } };
+  q.onkeydown = (ev) => {
+    if (ev.key === "Enter") { ev.preventDefault(); const e = hits()[0]; if (e) pickExample(e); }
+    if (ev.key === "ArrowDown") { const f = list.querySelector("button"); if (f) { ev.preventDefault(); f.focus(); } }
+  };
   dlg.onclick = (ev) => { if (ev.target === dlg) dlg.close(); };      // the padding-free dialog itself is only hit outside its box
 }
 
