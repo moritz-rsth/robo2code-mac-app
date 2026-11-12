@@ -174,6 +174,8 @@ details.settings .row input { font: inherit; font-size: 13px; border: 1px solid 
         <span style="flex:1"></span>
         <label class="lab" style="margin:0">Speed</label>
         <select id="speed"><option value="1">1x</option><option value="2">2x</option><option value="4" selected>4x</option><option value="8">8x</option><option value="20">20x</option></select>
+        <label class="lab" style="margin:0" for="render">Resolution</label>
+        <select id="render" title="the size the simulation is rendered and recorded at, so the size of the exported video's source. The live view always shows a small copy."><option value="640x360">Low 640x360</option><option value="1280x720" selected>High 1280x720</option><option value="1920x1080">Max 1920x1080</option></select>
         <button id="rpboth" disabled title="replay both simulations from the recorded frames">Replay both</button>
         <button id="run-base">Run left</button><button id="run-finetuned">Run right</button><button class="primary" id="run">Run both</button>
         <button id="manualmode" title="edit the system and user prompt yourself before a model gets them">Manual model use</button>
@@ -882,7 +884,7 @@ function run(sides = SIDES, prompts = null) {
   replayButtons();
   running = true; runButtons();
   post("/api/run", { instruction, scene: prompts ? prompts.scene : scene, sides, manual, prompts: prompts && { system: prompts.system, user: prompts.user },
-    example_id: prompts ? null : exampleId, dataset: prompts ? null : exampleDataset, speed: +$("#speed").value, formats: { base: $("#pf-base").value, finetuned: $("#pf-finetuned").value } }).then(({ run, error }) => {
+    example_id: prompts ? null : exampleId, dataset: prompts ? null : exampleDataset, speed: +$("#speed").value, render: $("#render").value, formats: { base: $("#pf-base").value, finetuned: $("#pf-finetuned").value } }).then(({ run, error }) => {
     if (error) { $("#hint").textContent = error; running = false; runButtons(); sides.forEach(endRecording); return; }
     es = new EventSource("/api/events/" + run);
     let finished = 0;

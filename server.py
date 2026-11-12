@@ -546,15 +546,18 @@ def work(run, side, req):
             return
         run.emit(side, "code", code=code, notes=notes)
         job = Path(tempfile.mkdtemp()) / "job.json"
-        job.write_text(json.dumps(dict(scene=req["scene"], code=code, sample=None if answer_row else sample, speed=req.get("speed", 4.0))))
+        job.write_text(json.dumps(dict(scene=req["scene"], code=code, sample=None if answer_row else sample, speed=req.get("speed", 4.0),
+                                         render=req.get("render") or "1280x720")))
         run.emit(side, "status", text="running in the simulator")
         p = subprocess.Popen([sys.executable, str(HERE / "sim_worker.py"), str(job)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         rec = recorder.Recorder(req.get("instruction"), model)               # the frames go to an MP4 on disk while they stream (Download video)
         result = None                                                        # the simulator's result event: the export's music follows it
         for line in p.stdout:
             e = json.loads(line)
-            if e["t"] == "frame":
-                rec.add(base64.b64decode(e["jpg"]))
+            if e["t"] == "frame":                                             # the full-size frame goes to the recording, the small copy to the live view
+                full = e.pop("jpg")
+                rec.add(base64.b64decode(full))
+                e["jpg"] = e.pop("live", None) or full
             if answer_row and e["t"] == "result" and e["executed"]:
                 e.update(success=False, reasons=["this question needs one short sentence, not a program: the arm must not move"])
             if e["t"] == "result":

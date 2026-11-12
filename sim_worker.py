@@ -27,13 +27,19 @@ from scene import TIMESTEP  # noqa: E402
 
 OUT = os.fdopen(os.dup(1), "w")          # protocol channel; anything else printed on fd 1 goes to stderr
 os.dup2(2, 1)
-# Frame size, 16:9. 1280x720 is sharp in the live view (shown about 560 px wide, so also on a Retina screen) and is what the recording and the 1920x1080 export are made from.
-# P2R_RENDER=960x540 or 640x360 makes it cheaper on a slow Mac; P2R_JPEG sets the JPEG quality.
-try:
-    W, H = (int(v) for v in os.environ.get("P2R_RENDER", "1280x720").lower().split("x"))
-except ValueError:
-    W, H = 1280, 720
+# Frame size, 16:9: what the recording and the 1920x1080 export are made from. The job's "render" ("1920x1080", "1280x720", "960x540" or "640x360",
+# chosen in the app) wins over P2R_RENDER; P2R_JPEG sets the JPEG quality. The live view gets a small copy of every frame (LIVE), so a high
+# resolution costs render time but not the browser's bandwidth.
+RENDER_SIZES = {"1920x1080", "1280x720", "960x540", "640x360"}
+W, H = 1280, 720
 JPEG_QUALITY = int(os.environ.get("P2R_JPEG", "88"))
+LIVE, LIVE_JPEG = (640, 360), 75
+
+
+def set_size(spec):
+    global W, H
+    if spec and spec.lower() in RENDER_SIZES:
+        W, H = (int(v) for v in spec.lower().split("x"))
 FRAME_EVERY = max(1, round(1 / (30 * TIMESTEP)))     # ~30 frames per simulated second
 
 
@@ -102,9 +108,11 @@ def install_frame_hook(speed):
         mujoco.mj_kinematics(st["model"], st["data"])
         mujoco.mj_camlight(st["model"], st["data"])               # places the scene's lights (kinematics alone leaves them at the origin)
         st["renderer"].update_scene(st["data"], camera=st["cam"])
-        buf = io.BytesIO()
-        Image.fromarray(st["renderer"].render()).save(buf, "JPEG", quality=JPEG_QUALITY, subsampling=0)   # 4:4:4, so coloured edges stay crisp
-        emit(t="frame", jpg=base64.b64encode(buf.getvalue()).decode(), sim_s=round(sim.steps * TIMESTEP, 2))
+        img, buf, live = Image.fromarray(st["renderer"].render()), io.BytesIO(), io.BytesIO()
+        img.save(buf, "JPEG", quality=JPEG_QUALITY, subsampling=0)                     # 4:4:4, so coloured edges stay crisp (the recording)
+        (img.resize(LIVE, Image.BILINEAR) if img.width > LIVE[0] else img).save(live, "JPEG", quality=LIVE_JPEG)   # the live view
+        emit(t="frame", jpg=base64.b64encode(buf.getvalue()).decode(), live=base64.b64encode(live.getvalue()).decode(),
+             sim_s=round(sim.steps * TIMESTEP, 2))
         wait = FRAME_EVERY * TIMESTEP / speed - (time.time() - st["last"])
         if wait > 0:
             time.sleep(wait)
@@ -133,6 +141,7 @@ def main():
     job = json.loads(Path(sys.argv[1]).read_text())
     code, scene, sample = job["code"], job["scene"], job.get("sample")
     C = importlib.import_module((sample or {}).get("_check", "check"))   # check_posv1 for data_posv1 / data_posv2 rows
+    set_size(job.get("render") or os.environ.get("P2R_RENDER"))
     remove_hook = install_frame_hook(max(float(job.get("speed", 4.0)), 0.1))
     t0 = time.time()
     final, err, sim = R.execute(scene, code)
