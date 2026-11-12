@@ -1,5 +1,5 @@
 """Records the frames of one simulated run into a video file for the "Download video" button.
-The JPEG frames of sim_worker.py are piped straight into ffmpeg (bundled with imageio-ffmpeg), which writes an H.264 MP4 to disk while the run
+The JPEG frames of sim_worker.py (1280x720, 4:4:4) are piped straight into ffmpeg (bundled with imageio-ffmpeg), which writes an H.264 MP4 to disk while the run
 goes on: memory stays flat however long the run is. The video plays at simulated real time (30 frames per simulated second), whatever the speed slider says.
 Without ffmpeg it falls back to a small GIF (every 3rd frame at half size, so 10 fps)."""
 import re
@@ -70,7 +70,7 @@ class Recorder:
         if self.proc is None:                # yuv420p + faststart: plays in QuickTime, Safari, iMessage and WhatsApp
             self.proc = subprocess.Popen([FFMPEG, "-loglevel", "error", "-y", "-f", "image2pipe", "-c:v", "mjpeg", "-framerate", str(FPS), "-i", "-",
                                           "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2:in_range=pc:out_range=tv,format=yuv420p",    # JPEG is full range, players want TV range
-                                          "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-movflags", "+faststart", str(self.path)],
+                                          "-c:v", "libx264", "-preset", "veryfast", "-crf", "16", "-movflags", "+faststart", str(self.path)],
                                          stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.proc.stdin.write(jpg)
 

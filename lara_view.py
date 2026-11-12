@@ -37,14 +37,19 @@ def swap_arm(xml):
     if asset is None:
         asset = ET.SubElement(root, "asset")
     for m in lara.findall("asset/mesh"):
-        ET.SubElement(asset, "mesh", name=m.get("name"), file=str(HERE / "assets" / m.get("file")))
+        ET.SubElement(asset, "mesh", name=m.get("name"), file=str(HERE / "assets" / m.get("file")), smoothnormal="true")     # smooth shading instead of visible facets
+    ET.SubElement(asset, "material", name="lara_shell", specular="0.5", shininess="0.6", reflectance="0.04")      # white housings: soft highlights
+    ET.SubElement(asset, "material", name="lara_joint", specular="0.35", shininess="0.4")                          # grey joint rings and gripper
     arm = lara.find("worldbody/body[@name='base']")
     for parent in arm.iter("body"):
         for g in parent.findall("geom"):
             if g.get("name", "").startswith("collision"):
                 parent.remove(g)
+    for g in arm.iter("geom"):
+        if g.get("type") == "mesh":
+            g.set("material", "lara_shell" if g.get("rgba", "").startswith("0.85") else "lara_joint")
     g = ET.SubElement(arm.find(".//body[@name='link6']"), "body", name="lara_gripper")
-    box = dict(type="box", contype="0", conaffinity="0", group="2", mass="0.1")
+    box = dict(type="box", contype="0", conaffinity="0", group="2", mass="0.1", material="lara_joint")
     ET.SubElement(g, "geom", name="lara_palm", size=".035 .055 .018", pos="0 0 .02", rgba=".17 .20 .24 1", **box)
     ET.SubElement(g, "site", name="lara_tcp", pos="0 0 .09", size=".003", rgba="0 0 0 0")
     for sign, name in ((1, "lara_fl"), (-1, "lara_fr")):

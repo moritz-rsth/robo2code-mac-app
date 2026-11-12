@@ -27,7 +27,13 @@ from scene import TIMESTEP  # noqa: E402
 
 OUT = os.fdopen(os.dup(1), "w")          # protocol channel; anything else printed on fd 1 goes to stderr
 os.dup2(2, 1)
-W, H = 640, 360
+# Frame size, 16:9. 1280x720 is sharp in the live view (shown about 560 px wide, so also on a Retina screen) and is what the recording and the 1920x1080 export are made from.
+# P2R_RENDER=960x540 or 640x360 makes it cheaper on a slow Mac; P2R_JPEG sets the JPEG quality.
+try:
+    W, H = (int(v) for v in os.environ.get("P2R_RENDER", "1280x720").lower().split("x"))
+except ValueError:
+    W, H = 1280, 720
+JPEG_QUALITY = int(os.environ.get("P2R_JPEG", "88"))
 FRAME_EVERY = max(1, round(1 / (30 * TIMESTEP)))     # ~30 frames per simulated second
 
 
@@ -77,11 +83,13 @@ def install_frame_hook(speed):
 
     def render(sim):
         if st["renderer"] is None:
-            st["model"] = floor_view.render_model(sim.scene)     # a copy for drawing only, so nothing here can reach the physics
+            st["model"] = floor_view.render_model(sim.scene, W, H)     # a copy for drawing only, so nothing here can reach the physics
+            st["model"].vis.global_.offwidth, st["model"].vis.global_.offheight = max(W, st["model"].vis.global_.offwidth), max(H, st["model"].vis.global_.offheight)
             st["data"] = mujoco.MjData(st["model"])
             st["follow"] = lara_view.Follow(st["model"], sim) if lara_view.enabled() else None
-            st["model"].vis.headlight.ambient[:] = 0.55
-            st["model"].vis.headlight.diffuse[:] = 0.75
+            st["model"].vis.headlight.ambient[:] = 0.60                # the two lights of floor_view.py do most of the work, the headlight only lifts the shade
+            st["model"].vis.headlight.diffuse[:] = 0.12
+            st["model"].vis.headlight.specular[:] = 0.0
             st["renderer"] = mujoco.Renderer(st["model"], H, W)
             cam = mujoco.MjvCamera()
             cam.lookat[:] = [0.40, 0.0, 0.12]
@@ -92,9 +100,10 @@ def install_frame_hook(speed):
         else:
             st["data"].qpos[:] = sim.data.qpos
         mujoco.mj_kinematics(st["model"], st["data"])
+        mujoco.mj_camlight(st["model"], st["data"])               # places the scene's lights (kinematics alone leaves them at the origin)
         st["renderer"].update_scene(st["data"], camera=st["cam"])
         buf = io.BytesIO()
-        Image.fromarray(st["renderer"].render()).save(buf, "JPEG", quality=75)
+        Image.fromarray(st["renderer"].render()).save(buf, "JPEG", quality=JPEG_QUALITY, subsampling=0)   # 4:4:4, so coloured edges stay crisp
         emit(t="frame", jpg=base64.b64encode(buf.getvalue()).decode(), sim_s=round(sim.steps * TIMESTEP, 2))
         wait = FRAME_EVERY * TIMESTEP / speed - (time.time() - st["last"])
         if wait > 0:
