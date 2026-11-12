@@ -1,14 +1,17 @@
 """Turns the recorded run of one side into a shareable 1920x1080 MP4 for the Export video overlay. Runs as its own process (niced), so an export never
 slows the live app; progress goes to stdout as JSON lines.     usage: python exporter.py <job.json>
 job = {"ffmpeg", "video" (the 640x360 recording of recorder.py), "frames" (its frame count), "out", "prompt" (request or ""), "model" (label or ""),
-       "reasoning", "answer", "pace" (reasoning words per second), "code_pace" (code, same unit; default 2x pace), "speed" (simulation speed)}
+       "reasoning", "answer", "pace" (reasoning words per second), "code_pace" (code, same unit; default 2x pace), "speed" (simulation speed),
+       "music" (default true), "request" (the instruction, even when the prompt card is off), "scene", "result" (the simulator's result event), "code"}
 
 The sequence, each part only if its text is there: prompt card (the request typed into a bubble over the blurred first frame of the scene),
 hand-off (the bubble flies into a model card, which slides out at the top; the model's name stays as a footnote), thinking (cycling words, the reasoning streams in),
 answer (highlighted Python, or plain text), then straight into the simulation at the chosen speed with its end-state hold. The intro starts with the
 sharp input scene for 1.5 s before it blurs and dims.
 Every frame is drawn with Pillow and piped into one ffmpeg (H.264, yuv420p, TV range); the recording is decoded and scaled by a second ffmpeg,
-one frame at a time: memory stays flat however long the run or the reasoning is."""
+one frame at a time: memory stays flat however long the run or the reasoning is.
+With "music", music.py composes a soundtrack from the finished timeline (sections, typed words, code lines, the simulator's flags and result) and a third
+ffmpeg muxes it in as stereo AAC; if that fails for any reason the silent video is delivered instead."""
 import bisect
 import json
 import math
@@ -234,35 +237,57 @@ class Intro:
         f = self.f_code if is_code(self.answer) else self.f_reason
         self.a_typed = Typed(runs, f, inner("answer"), 42 if f is self.f_code else 50, code=f is self.f_code)
 
-    # ---- timeline: a list of (frames, draw(i) -> RGBA frame)
+    # ---- timeline: a list of (name, frames, draw(i) -> RGBA frame); the names are the cues of the music
     def _plan(self):
         sec = lambda s: max(1, int(round(s * FPS)))
-        self.segments.append((sec(1.5), lambda i: self.sharp.copy()))           # the input scene as it is, then it blurs and dims
-        self.segments.append((sec(0.5), lambda i, n=sec(0.5): Image.blend(self.sharp, self.bg, ease((i + 1) / n))))
+        seg = lambda name, n, draw: self.segments.append((name, n, draw))
+        seg("scene", sec(1.5), lambda i: self.sharp.copy())                     # the input scene as it is, then it blurs and dims
+        seg("scene", sec(0.5), lambda i, n=sec(0.5): Image.blend(self.sharp, self.bg, ease((i + 1) / n)))
         if self.prompt:
             n_type = sec(self.p_typed.total / self.cps_prompt)
-            self.segments.append((sec(0.35), lambda i, n=sec(0.35): self.prompt_frame(0, ease(i / n))))
-            self.segments.append((n_type, lambda i, n=n_type: self.prompt_frame(self.p_typed.total * (i + 1) / n, 1)))
-            self.segments.append((sec(0.8 if self.model else 1.6), lambda i: self.prompt_frame(self.p_typed.total, 1, blink=i)))
+            seg("prompt", sec(0.35), lambda i, n=sec(0.35): self.prompt_frame(0, ease(i / n)))
+            seg("prompt_type", n_type, lambda i, n=n_type: self.prompt_frame(self.p_typed.total * (i + 1) / n, 1))
+            seg("prompt", sec(0.8 if self.model else 1.6), lambda i: self.prompt_frame(self.p_typed.total, 1, blink=i))
         if not self.model:
             return
         n = sec(1.9 if self.prompt else 1.4)
-        self.segments.append((n, lambda i, n=n: self.handoff_frame(i / FPS)))
+        seg("handoff", n, lambda i, n=n: self.handoff_frame(i / FPS))
         if self.reasoning:
             lead, n_r = sec(0.7), sec(self.r_typed.total / self.cps_reason)
-            self.segments.append((lead, lambda i: self.text_frame(think_t=i / FPS, r=0, a=None)))
-            self.segments.append((n_r, lambda i, n=n_r, lead=lead: self.text_frame(think_t=(i + lead) / FPS, r=self.r_typed.total * (i + 1) / n, a=None)))
-            self.segments.append((sec(0.35), lambda i: self.text_frame(r=self.r_typed.total, a=0)))
+            seg("think", lead, lambda i: self.text_frame(think_t=i / FPS, r=0, a=None))
+            seg("think_type", n_r, lambda i, n=n_r, lead=lead: self.text_frame(think_t=(i + lead) / FPS, r=self.r_typed.total * (i + 1) / n, a=None))
+            seg("think", sec(0.35), lambda i: self.text_frame(r=self.r_typed.total, a=0))
         n_a = sec(self.a_typed.total / self.cps_code)
-        self.segments.append((n_a, lambda i, n=n_a: self.text_frame(r=self.reasoning and self.r_typed.total, a=self.a_typed.total * (i + 1) / n)))
+        seg("code_type", n_a, lambda i, n=n_a: self.text_frame(r=self.reasoning and self.r_typed.total, a=self.a_typed.total * (i + 1) / n))
 
     def frames(self):
-        return sum(n for n, _ in self.segments)
+        return sum(n for _, n, _ in self.segments)
 
     def __iter__(self):
-        for n, draw in self.segments:
+        for _, n, draw in self.segments:
             for i in range(n):
                 yield draw(i)
+
+    def cues(self):
+        """What the music can follow, in seconds: the span of each part and the moment of every typed word of the request and the reasoning, of
+        every line of code (the frame the typing reaches its first character) and of the hand-off pulse (the model card's glow)."""
+        sections, events, at = {}, {"prompt_words": [], "reason_words": [], "code_lines": []}, 0
+
+        def typed(typed_text, n_frames, positions):                            # char index c appears at frame c * n / total
+            return [(at + c * n_frames / typed_text.total) / FPS for c in positions]
+        for name, n, _ in self.segments:
+            part = name.replace("_type", "")
+            sections[part] = (sections.get(part, (at / FPS,))[0], (at + n) / FPS)
+            if name == "prompt_type":
+                events["prompt_words"] = typed(self.p_typed, n, [m.start() for m in re.finditer(r"\S+", "\n".join(self.p_typed.text))])
+            elif name == "think_type":
+                events["reason_words"] = typed(self.r_typed, n, [m.start() for m in re.finditer(r"\S+", "\n".join(self.r_typed.text))])
+            elif name == "code_type":
+                events["code_lines"] = typed(self.a_typed, n, [c for c, line in zip(self.a_typed.cum, self.a_typed.text) if line.strip()])
+            elif name == "handoff":
+                events["pulse"] = at / FPS + (1.05 if self.prompt else 0.5)     # k_pulse peaks in handoff_frame
+            at += n
+        return sections, events
 
     # ---- the frames of each part
     def prompt_frame(self, n, appear, blink=None):
@@ -366,6 +391,37 @@ def first_frame(job):
     return Image.frombytes("RGB", (640, 360), out[:640 * 360 * 3])
 
 
+def music_plan(job, intro, n_intro, n_out, speed):
+    """Everything music.py follows, in seconds of the finished video: the intro's cues, the simulation span, the moment the program ended
+    (the recording ends with recorder.HOLD frames of its end state), the simulator's collision flags (recorded in simulated seconds) and its result."""
+    sections, events = intro.cues() if intro else ({}, {})
+    end, t_sim = n_out / FPS, n_intro / FPS
+    result = job.get("result") or {}
+    t_end = min(end - 1.0, t_sim + max(0, job.get("frames", 0) - FPS) / speed / FPS)
+    sections["sim"], sections["hold"] = (t_sim, t_end), (t_end, end)
+    events["flags"] = [t_sim + float(f["sim_s"]) / speed for f in result.get("strict_flags") or [] if "sim_s" in f]
+    events["program_end"] = t_end
+    return dict(duration=end, request=job.get("request") or job.get("prompt") or "", model=job.get("model") or "", speed=speed, scene=job.get("scene"),
+                result=result, code=job.get("code") or "", sections=sections, events=events)
+
+
+def add_music(job, intro, n_intro, n_out, speed, silent):
+    """Composes the soundtrack and muxes it into job["out"] as AAC (stereo, 48 kHz). True if the video with music is in place."""
+    import music                                      # numpy is imported here, so a broken music module never stops a silent export
+    out = Path(job["out"])
+    wav = out.with_suffix(".wav")
+    try:
+        music.write_wav(wav, music.compose(music_plan(job, intro, n_intro, n_out, speed)))
+        r = subprocess.run([job["ffmpeg"], "-loglevel", "error", "-y", "-i", str(silent), "-i", str(wav), "-map", "0:v:0", "-map", "1:a:0",
+                            "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", "-shortest", "-movflags", "+faststart", str(out)],
+                           capture_output=True, timeout=300)
+        if r.returncode or not out.exists():
+            raise RuntimeError("ffmpeg could not mux the music: " + r.stderr.decode(errors="replace")[-300:])
+        return True
+    finally:
+        wav.unlink(missing_ok=True)
+
+
 def main():
     try:
         os.nice(10)                                       # the live app and its simulations come first
@@ -376,10 +432,12 @@ def main():
     intro = Intro(job, first_frame(job)) if (job.get("prompt") or job.get("model")) else None
     n_intro, n_sim = intro.frames() if intro else 0, int(job.get("frames", 0) / speed) + FPS
     total, done = max(1, n_intro + n_sim), 0
+    music_on = job.get("music", True)
+    video = Path(job["out"]).with_suffix(".silent.mp4") if music_on else Path(job["out"])     # with music the picture is encoded first, then muxed
     enc = subprocess.Popen([job["ffmpeg"], "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-framerate", str(FPS), "-i", "-",
                             "-vf", "scale=out_range=tv:out_color_matrix=bt709,format=yuv420p,setparams=range=tv:colorspace=bt709:color_primaries=bt709:color_trc=bt709", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
                             "-color_range", "tv", "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
-                            "-movflags", "+faststart", job["out"]], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                            "-movflags", "+faststart", str(video)], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
     def put(rgb_bytes):
         nonlocal done
@@ -419,11 +477,19 @@ def main():
         enc.stdin.close()
         if enc.wait(timeout=300):
             raise RuntimeError("ffmpeg could not encode the video: " + enc.stderr.read().decode(errors="replace")[-300:])
+        if music_on:
+            try:
+                add_music(job, intro, n_intro, done, speed, video)
+                video.unlink(missing_ok=True)
+            except Exception as e:                        # no music, but a video: the silent one takes its place
+                emit(note=f"no music: {type(e).__name__}: {e}")
+                os.replace(video, job["out"])
         emit(progress=1.0, done=True)
     except Exception as e:
         if enc.poll() is None:
             enc.kill()
         Path(job["out"]).unlink(missing_ok=True)
+        video.unlink(missing_ok=True)
         emit(error=f"{type(e).__name__}: {e}")
 
 

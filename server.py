@@ -550,18 +550,22 @@ def work(run, side, req):
         run.emit(side, "status", text="running in the simulator")
         p = subprocess.Popen([sys.executable, str(HERE / "sim_worker.py"), str(job)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         rec = recorder.Recorder(req.get("instruction"), model)               # the frames go to an MP4 on disk while they stream (Download video)
+        result = None                                                        # the simulator's result event: the export's music follows it
         for line in p.stdout:
             e = json.loads(line)
             if e["t"] == "frame":
                 rec.add(base64.b64decode(e["jpg"]))
             if answer_row and e["t"] == "result" and e["executed"]:
                 e.update(success=False, reasons=["this question needs one short sentence, not a program: the arm must not move"])
+            if e["t"] == "result":
+                result = {k: e.get(k) for k in ("executed", "error", "success", "strict_flags", "final", "sim_seconds", "calls")}
             run.emit(side, e.pop("t"), kind="code", **e)
         p.wait()
         video = rec.finish()
         if video:
             run.videos[side] = video
-            run.meta[side] = dict(prompt=req.get("instruction") or "", model=model, reasoning=reasoning, answer=text, frames=min(rec.n, recorder.MAX_FRAMES) + recorder.HOLD)
+            run.meta[side] = dict(prompt=req.get("instruction") or "", model=model, reasoning=reasoning, answer=text, frames=min(rec.n, recorder.MAX_FRAMES) + recorder.HOLD,
+                                  scene=req["scene"], result=result, code=code)
             run.emit(side, "video", url=f"/api/video/{run.id}/{side}", name=video[1], run=run.id)
     except Exception as e:
         error = llm_backends.memory_hint("this model", other_model(side)) if llm_backends.is_oom(e) else f"{type(e).__name__}: {e}"
@@ -572,7 +576,7 @@ def work(run, side, req):
 
 
 def export(job, run, side, req):
-    """Export video: renders the 1920x1080 MP4 of one side in exporter.py (its own niced process, so the live app stays smooth)."""
+    """Export video: renders the 1920x1080 MP4 of one side in exporter.py (its own niced process, so the live app stays smooth), with its music unless the switch is off."""
     st = EXPORTS[job]
     with EXPORT_LOCK:
         try:
@@ -580,7 +584,8 @@ def export(job, run, side, req):
             meta, out = run.meta[side], EXPORT_DIR / f"{job}.mp4"
             spec = dict(ffmpeg=recorder.FFMPEG, video=str(run.videos[side][0]), frames=meta["frames"], out=str(out),
                         prompt=meta["prompt"] if req.get("prompt") else "", model=meta["model"] if req.get("model") else "",
-                        reasoning=meta["reasoning"], answer=meta["answer"], pace=float(req.get("pace") or 25), code_pace=float(req.get("code_pace") or 0), speed=float(req.get("speed") or 2))
+                        reasoning=meta["reasoning"], answer=meta["answer"], pace=float(req.get("pace") or 25), code_pace=float(req.get("code_pace") or 0), speed=float(req.get("speed") or 2),
+                        music=bool(req.get("music", True)), request=meta["prompt"], scene=meta.get("scene"), result=meta.get("result"), code=meta.get("code") or "")
             spec_file = Path(tempfile.mkdtemp()) / "export.json"
             spec_file.write_text(json.dumps(spec))
             p = subprocess.Popen([sys.executable, str(HERE / "exporter.py"), str(spec_file)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
