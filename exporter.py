@@ -283,7 +283,9 @@ class Intro:
             elif name == "think_type":
                 events["reason_words"] = typed(self.r_typed, n, [m.start() for m in re.finditer(r"\S+", "\n".join(self.r_typed.text))])
             elif name == "code_type":
-                events["code_lines"] = typed(self.a_typed, n, [c for c, line in zip(self.a_typed.cum, self.a_typed.text) if line.strip()])
+                lines = [(c, line) for c, line in zip(self.a_typed.cum, self.a_typed.text) if line.strip()]
+                events["code_lines"] = typed(self.a_typed, n, [c for c, _ in lines])
+                events["code_text"] = [line.strip() for _, line in lines]      # what each line says: the music plays grasps and releases differently
             elif name == "handoff":
                 events["pulse"] = at / FPS + (1.05 if self.prompt else 0.5)     # k_pulse peaks in handoff_frame
             at += n

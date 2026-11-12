@@ -4,16 +4,19 @@ no network; the same plan always gives the same track.     compose(plan) -> floa
 plan = {"duration" (seconds of the video), "request" (the instruction), "model", "speed", "scene" ({objects: {id: {color, position}}}),
         "result" (the simulator's result event or None: executed, error, success, strict_flags, final), "code" (the program or ""),
         "sections": {name: (start, end) in seconds; any of scene, prompt, handoff, think, code, sim, hold},
-        "events": {"prompt_words", "reason_words", "code_lines", "flags": [seconds], "pulse": seconds or None, "program_end": seconds or None}}
+        "events": {"prompt_words", "reason_words", "code_lines", "flags": [seconds], "code_text": [the lines], "pulse": seconds or None, "program_end": seconds or None}}
 
 What the video decides:  the request text seeds everything (key, mode, tempo, the progressions, the drum feel, the phrasing), so the same
 request always sounds the same and a new request sounds new.  The cubes are the motif: every cube is a note (its colour picks the scale step,
 its place on the table pans it), heard once at the very start as the scene is shown, then as the theme of the simulation; cubes that moved during
-the run are the accented notes.  The intro stays calm: a pad on two chords, a soft pluck for every word as the request is typed in, a riser that
+the run are the accented notes.  The model's name picks the lead timbre and the colour of the pad, so the two sides of a duel sound alike in
+their harmony (same request) but different in their voice.  The intro stays calm: a pad on two chords, a soft pluck for every word as the request is typed in, a riser that
 lands on the hand-off pulse.  The reasoning gets a steady electric-piano arpeggio with sparkles on its words; every line of code strikes a note of a
-rising arpeggio as it appears, and the drums come in underneath.  The simulation is the full groove: kick, snare and hats (half time below 1x,
+rising arpeggio as it appears (a close_gripper line is a low grab, an open_gripper line a high release, a comment or a def is silent), and the
+drums come in underneath.  The simulation is the full groove: kick, snare and hats (half time below 1x,
 driving above 8x: the speed sets the feel, the number of robot calls per shown second the density), a bass line, the cube theme in phrases; every
-collision flag of the simulator is a dissonant stab at its moment in the picture.  The program's end gets its cadence: a bright major chord with
+collision flag of the simulator is a dissonant stab at its moment in the picture; the pad breathes with the kick, and every eighth bar the
+drums step out for a bar and come back with a crash.  The program's end gets its cadence: a bright major chord with
 bells if the task was solved, a plain tonic if nothing was checked, a dark minor chord if the run failed; it rings through the final hold.
 Everything is rendered into three buses (dry, delay send, reverb send), then a ping-pong delay, a convolution reverb with a synthetic tail, a
 soft clipper, a look-ahead peak limiter (ceiling -1 dBFS) and a loudness fit around -15 dBFS RMS, which social platforms play back unchanged."""
@@ -91,12 +94,15 @@ def _hp_noise(n, rng, order=1):
 
 
 # ---- instruments: each returns a mono float32 signal starting at the note's onset
-def pad(f, dur, bright=0.35):
-    """Two detuned wavetable voices, one per channel (stereo), a slow brightness swell between a dark and a bright table."""
+def pad(f, dur, bright=0.35, duck=None):
+    """Two detuned wavetable voices, one per channel (stereo), a slow brightness swell between a dark and a bright table.
+    duck = beat length: the pad dips on every beat and swells back, breathing with the kick."""
     n = _n(dur + 1.2)
     t = _t(n)
     b = np.clip(bright + 0.18 * np.sin(2 * np.pi * 0.11 * t + 1.0), 0, 1).astype(F32)
     e = _env(n, 0.7, 2.0, 0.85, 1.0, _n(dur)) * 0.5
+    if duck:
+        e *= 1 - 0.4 * np.exp(-((t % duck) / duck) * 6).astype(F32)
     voices = [((1 - b) * _wave(DARK, f, n, cents, 0.0015) + b * _wave(BRIGHT, f, n, cents, 0.0015)) * e for cents in (-7, 7)]
     return np.stack(voices, axis=1)
 
@@ -354,6 +360,9 @@ def compose(plan):
     result = plan.get("result") or {}
     motif = motif_of(plan.get("scene"), result)
     speed = float(plan.get("speed") or 1)
+    voice = _seed(plan.get("model") or "") % 3                      # the model's voice: 0 electric piano, 1 plucks, 2 bells (and the pad's colour)
+    lead = (epiano, lambda f, v, d: pluck(f, v, d, 1.0, 2.0), lambda f, v, d: bell(f, v * 0.8, d + 0.8))[voice]
+    tint = (0.45, 0.6, 0.3)[voice]
     mix = Mix(end)
     sim = sec.get("sim")
     pulse = ev.get("pulse")
@@ -391,7 +400,7 @@ def compose(plan):
     for t0, t1, d, voicing in chords:
         phase_gain = 0.55 if t1 <= grid_b else 0.7 if t1 <= t_sim else 0.85
         for m in voicing:
-            mix.add(pad(_midi(m), t1 - t0, 0.25 if t1 <= grid_b else 0.45), t0, pan=(m % 5 - 2) * 0.35, gain=0.16 * phase_gain, verb=0.5)
+            mix.add(pad(_midi(m), t1 - t0, 0.25 if t1 <= grid_b else tint, beat if t_sim <= t0 < t_end else None), t0, pan=(m % 5 - 2) * 0.35, gain=0.16 * phase_gain, verb=0.5)
 
     # -- the scene: the cubes chime once, left to right in pitch order of the ids, as the sharp first frame is shown
     scene_t = (sec.get("scene") or (0, 0))[0]
@@ -437,12 +446,25 @@ def compose(plan):
         for k, t in enumerate(_thin(ev.get("reason_words") or [], 2.5)):
             step = motif[(k * 3) % len(motif)][0]
             mix.add(bell(_midi(key.midi(step, 5)), 0.3, 1.0), t, pan=motif[(k * 3) % len(motif)][1], gain=0.3, verb=0.8, delay=0.3)
-        # every line of code strikes the next note of a rising arpeggio of the current chord (two octaves, then it starts over)
-        lines = _thin(ev.get("code_lines") or [], 9)
-        for k, t in enumerate(lines):
-            c = chord_at(t)
+        # every line of code strikes the next note of a rising arpeggio of the current chord (two octaves, then it starts over); the program's
+        # vocabulary colours it: close_gripper is a low grab, open_gripper a high release, a comment or a def says nothing
+        lines, texts = ev.get("code_lines") or [], ev.get("code_text") or []
+        kinds = [("grab" if "close_gripper" in x else "release" if "open_gripper" in x else "quiet" if x.startswith(("#", "def ", "import ", "from ")) else "note")
+                 for x in texts] + ["note"] * (len(lines) - len(texts))
+        last, k = -1e9, 0
+        for t, kind in zip(lines, kinds):
+            if kind == "quiet" or t - last < 1 / 9:
+                continue
+            last, c = t, chord_at(t)
             v = c[3] + [m + 12 for m in c[3]]
-            mix.add(pluck(_midi(v[k % len(v)]), 0.55, 0.15, 2.0, 2.0), t, pan=-0.5 + (k % len(v)) / len(v), gain=0.42, verb=0.3, delay=0.35)
+            if kind == "grab":
+                mix.add(bass(_midi(key.root_of(c[2])), beat * 0.5, 0.9), t, gain=0.6)
+                mix.add(pluck(_midi(v[0] - 12), 0.8, 0.2, 1.0, 3.0), t, gain=0.45, verb=0.3)
+            elif kind == "release":
+                mix.add(bell(_midi(v[-1] + 12), 0.5, 1.2), t, pan=0.4, gain=0.4, verb=0.7, delay=0.4)
+            else:
+                mix.add(pluck(_midi(v[k % len(v)]), 0.55, 0.15, 2.0, 2.0), t, pan=-0.5 + (k % len(v)) / len(v), gain=0.42, verb=0.3, delay=0.35)
+                k += 1
         if sim and t1 - t0 > 2 * beat:                              # a snare roll into the simulation
             for k in range(8):
                 mix.add(snare(0.25 + 0.08 * k, rng), t_sim - beat + k * beat / 8, gain=0.5, verb=0.2)
@@ -458,9 +480,17 @@ def compose(plan):
         mix.add(crash(0.5, rng), t_sim, gain=0.5, verb=0.4)
         mix.add(kick(1.0, rng), t_sim, gain=0.9, verb=0.05)
         b, t = 0, t_sim
+        n_bars = int((t_end - t_sim) / bar)
         while t < t_end - 0.05:                                     # bar by bar
             c = chord_at(t)
             root = key.root_of(c[2])
+            if b % 8 == 7 and n_bars >= 12 and b < n_bars - 2:      # a breakdown: the drums step out for a bar, the bass holds, a crash brings them back
+                mix.add(bass(_midi(root), bar * 0.9, 0.7), t, gain=0.6)
+                mix.add(crash(0.5, rng), t + bar, gain=0.5, verb=0.4)
+                for k in range(6):
+                    mix.add(hat(0.2 + 0.06 * k, False, rng), t + bar - beat + k * beat / 6, pan=0.3, gain=0.4)
+                t, b = t + bar, b + 1
+                continue
             for q in kicks:
                 if t + q * beat < t_end:
                     mix.add(kick(0.9 if q == 0 else 0.75, rng), t + q * beat, gain=0.85, verb=0.05)
@@ -482,7 +512,7 @@ def compose(plan):
                     step, pan, moved = motif[(i + b // 2) % len(motif)]
                     tn = t + q * beat
                     if tn < t_end - 0.1:
-                        mix.add(epiano(_midi(key.midi((step + shift) % 14, 4)), 0.9 if moved else 0.65, beat * 0.6), tn, pan=pan * 0.6, gain=0.55, verb=0.35, delay=0.3)
+                        mix.add(lead(_midi(key.midi((step + shift) % 14, 4)), 0.9 if moved else 0.65, beat * 0.6), tn, pan=pan * 0.6, gain=0.55, verb=0.35, delay=0.3)
                 if b % 4 == 0 and b:                                # answered by a high bell on the chord's fifth
                     mix.add(bell(_midi(c[3][-1] + 12), 0.4), t + 3.5 * beat, pan=-0.3, gain=0.3, verb=0.7)
             t, b = t + bar, b + 1
